@@ -1,0 +1,267 @@
+const api = window.proxyking;
+const $ = id => document.getElementById(id);
+const records = new Map();
+const views = { request: 'headers', response: 'headers' };
+let state = { running: false, busy: false, host: '127.0.0.1', port: 8080 };
+let selectedId = null;
+let selectedDomain = null;
+let selectedApp = null;
+let currentRecord = null;
+let renderQueued = false;
+let detailVersion = 0;
+let noticeTimer = null;
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function bytes(value = 0) { return value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1048576).toFixed(1)} MB`; }
+function colorHue(value) { return [...value].reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) % 360, 0); }
+function notify(message) {
+  clearTimeout(noticeTimer);
+  noticeTimer = null;
+  $('notice').textContent = message;
+  $('notice').hidden = !message;
+  if (message) noticeTimer = setTimeout(() => {
+    $('notice').hidden = true;
+    $('notice').textContent = '';
+    noticeTimer = null;
+  }, 6000);
+}
+async function action(fn) { try { return await fn(); } catch (error) { notify(error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); return null; } }
+
+function updateState(next) {
+  state = next;
+  const mode = state.busy ? 'Updating' : state.running ? 'Running' : 'Paused';
+  const className = `status-indicator ${state.busy ? 'busy' : state.running ? '' : 'paused'}`;
+  $('statusIndicator').className = className;
+  $('footerStatus').className = className;
+  $('statusText').textContent = mode;
+  $('headerMode').textContent = mode;
+  $('captureIcon').className = `capture-icon ${state.running ? 'pause' : 'play'}`;
+  $('captureButton').title = state.running ? 'Pause capture' : 'Start capture';
+  $('captureButton').setAttribute('aria-label', $('captureButton').title);
+  const endpoint = `${state.host || '127.0.0.1'}:${state.port}`;
+  $('headerEndpoint').textContent = endpoint;
+  $('setupEndpoint').textContent = endpoint;
+  $('port').disabled = state.running || state.busy;
+  $('automaticProxy').disabled = state.running || state.busy || state.recoveryPending;
+  $('captureButton').disabled = state.busy || (!state.running && state.recoveryPending);
+  $('newButton').disabled = state.busy || state.recoveryPending && !state.systemProxy;
+  $('recoverButton').hidden = !state.recoveryPending || state.running;
+  $('recoverButton').disabled = state.busy;
+  $('routingStatus').textContent = state.busy ? 'Updating system proxy…' : state.recoveryPending && !state.systemProxy ? 'Proxy recovery needed' : state.systemProxy ? `System proxy → ${endpoint}` : state.running ? `Manual proxy → ${endpoint}` : 'System proxy restored';
+}
+
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  setTimeout(() => { renderQueued = false; render(); }, 70);
+}
+
+function filteredRecords() {
+  const search = $('search').value.toLowerCase();
+  const filter = $('typeFilter').value;
+  return [...records.values()].filter(record => {
+    if (selectedDomain && (record.domain || record.host) !== selectedDomain || selectedApp && record.application !== selectedApp) return false;
+    if (!`${record.url} ${record.method} ${record.status || ''}`.toLowerCase().includes(search)) return false;
+    return filter === 'all' || filter === 'https' && record.secure || filter === 'errors' && (record.state === 'failed' || record.status >= 400) || filter === 'json' && /json/i.test(record.contentType || '') || filter === 'tunnels' && record.tunneled;
+  }).reverse();
+}
+
+function render() {
+  const all = [...records.values()];
+  const visible = filteredRecords();
+  const rows = visible.map(record => {
+    const row = element('button', `request-row${selectedId === record.id ? ' selected' : ''}`);
+    row.setAttribute('aria-label', `${record.method} ${record.url}, status ${record.status || record.state}`);
+    const target = element('div', 'request-target');
+    target.append(element('div', 'request-host', record.host), element('div', 'request-path', record.path));
+    const type = record.tunneled ? 'TUNNEL' : record.secure ? 'HTTPS' : 'HTTP';
+    row.append(
+      element('span', 'method', record.method), target,
+      element('span', record.state === 'failed' || record.status >= 400 ? 'status-bad' : record.status ? 'status-good' : 'status-pending', record.state === 'failed' ? 'Error' : record.status || '…'),
+      element('span', 'protocol-badge', type),
+      element('span', 'cell-muted', record.duration === null ? '…' : `${record.duration} ms`),
+      element('span', 'cell-muted', bytes(record.size))
+    );
+    row.addEventListener('click', () => { selectedId = record.id; render(); loadDetail(); });
+    return row;
+  });
+  $('requests').replaceChildren(...rows);
+  $('empty').hidden = visible.length > 0;
+  $('empty').querySelector('h2').textContent = all.length ? 'No matching connections' : state.running ? 'Waiting for traffic' : 'Ready to capture';
+  $('empty').querySelector('p').textContent = all.length ? 'Change the domain, search, or filter.' : state.running ? 'Browse normally to populate this list.' : 'Press Start, then browse normally.';
+  $('requestCount').textContent = all.length;
+  $('totalBadge').textContent = all.length;
+  $('visibleCount').textContent = `${visible.length} of ${all.length} requests`;
+  $('requestTraffic').textContent = bytes(all.reduce((total, record) => total + (record.requestSize || 0), 0));
+  $('responseTraffic').textContent = bytes(all.reduce((total, record) => total + record.size, 0));
+  const hosts = [...new Set(all.map(record => record.domain || record.host))].sort();
+  const apps = [...new Set(all.map(record => record.application || 'Unknown app'))].sort();
+  $('hostCount').textContent = hosts.length;
+  $('footerHosts').textContent = hosts.length;
+  $('appCount').textContent = apps.length;
+  $('allTraffic').classList.toggle('active', !selectedDomain && !selectedApp);
+  $('apps').replaceChildren(...apps.map(app => {
+    const button = element('button', `host-button${app === selectedApp ? ' selected' : ''}`);
+    const icon = element('span', 'app-icon', app.slice(0, 1).toUpperCase());
+    icon.style.setProperty('--icon-hue', colorHue(app));
+    button.append(icon, element('span', 'app-name', app));
+    button.title = app;
+    button.addEventListener('click', () => { selectedApp = app === selectedApp ? null : app; selectedDomain = null; render(); });
+    return button;
+  }));
+  if (!apps.length) $('apps').append(element('p', 'subtle', 'Apps appear as traffic arrives.'));
+  $('hosts').replaceChildren(...hosts.map(domain => {
+    const button = element('button', `host-button domain-button${domain === selectedDomain ? ' selected' : ''}`);
+    button.append(element('span', 'domain-icon', '◌'), element('span', 'domain-name', domain));
+    button.title = domain;
+    button.addEventListener('click', () => { selectedDomain = domain === selectedDomain ? null : domain; selectedApp = null; render(); });
+    return button;
+  }));
+  if (!hosts.length) $('hosts').append(element('p', 'subtle', 'Domains appear as traffic arrives.'));
+  if (selectedId && !records.has(selectedId)) resetSelection();
+}
+
+function resetSelection() {
+  selectedId = null; currentRecord = null;
+  $('selectedMethod').textContent = '—';
+  $('selectedUrl').textContent = 'Select a connection to inspect its URL';
+  $('selectedUrl').title = '';
+  $('copyUrl').disabled = true;
+  $('requestSummary').textContent = 'No request selected';
+  $('responseSummary').textContent = 'No response selected';
+  $('requestContent').replaceChildren(element('div', 'placeholder', 'Select a connection above.'));
+  $('responseContent').replaceChildren(element('div', 'placeholder', 'Select a connection above.'));
+}
+
+async function loadDetail() {
+  const version = ++detailVersion;
+  const detail = await action(() => api.detail(selectedId));
+  if (version !== detailVersion || !detail || detail.id !== selectedId) return;
+  currentRecord = detail;
+  $('selectedMethod').textContent = detail.method;
+  $('selectedUrl').textContent = detail.url;
+  $('selectedUrl').title = detail.url;
+  $('copyUrl').disabled = false;
+  $('requestSummary').textContent = `${bytes(detail.requestBody?.size)} · ${Object.keys(detail.requestHeaders || {}).length} headers`;
+  $('responseSummary').textContent = `${detail.status || detail.state} · ${bytes(detail.size)} · ${detail.duration ?? '…'} ms`;
+  renderMessages();
+}
+
+function pairs(values, emptyText) {
+  const entries = Object.entries(values || {});
+  if (!entries.length) return element('div', 'placeholder', emptyText);
+  const fragment = document.createDocumentFragment();
+  for (const [key, raw] of entries) {
+    const row = element('div', 'kv');
+    row.append(element('span', 'key', key), element('span', 'value', Array.isArray(raw) ? raw.join('\n') : String(raw ?? '')));
+    fragment.append(row);
+  }
+  return fragment;
+}
+
+function prettyBody(body, pending) {
+  const container = document.createDocumentFragment();
+  if (body?.note) container.append(element('p', 'body-note', body.note));
+  let value = body?.text || (pending ? 'Waiting for body…' : 'No body');
+  if (body?.encoding !== 'base64' && !body?.truncated && body?.text) { try { value = JSON.stringify(JSON.parse(body.text), null, 2); } catch {} }
+  container.append(element('pre', '', value));
+  return container;
+}
+
+function rawMessage(side, record) {
+  const request = side === 'request';
+  const headers = request ? record.requestHeaders : record.responseHeaders;
+  const first = request ? `${record.method} ${record.path} HTTP/1.1` : `HTTP/1.1 ${record.status || 0}`;
+  const lines = Object.entries(headers || {}).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`);
+  const body = request ? record.requestBody : record.responseBody;
+  return [first, ...lines, '', body?.text || ''].join('\n');
+}
+
+function queryValues(side, record) {
+  const source = side === 'request' ? record.url : record.responseHeaders?.location;
+  if (!source) return {};
+  try { return Object.fromEntries(new URL(source, record.url).searchParams); } catch { return {}; }
+}
+
+function renderSide(side) {
+  const content = $(`${side}Content`);
+  if (!currentRecord) return;
+  const view = views[side];
+  if (view === 'headers') content.replaceChildren(pairs(currentRecord[`${side}Headers`], `No ${side} headers.`));
+  else if (view === 'query') content.replaceChildren(pairs(queryValues(side, currentRecord), side === 'request' ? 'No query parameters.' : 'No redirect query parameters.'));
+  else if (view === 'body') content.replaceChildren(prettyBody(currentRecord[`${side}Body`], currentRecord.state === 'pending'));
+  else content.replaceChildren(element('pre', '', rawMessage(side, currentRecord)));
+}
+function renderMessages() { renderSide('request'); renderSide('response'); }
+
+function openSetup() { $('setup').showModal(); }
+function setupSectionToggle(buttonId, contentId, collapsedClass) {
+  const button = $(buttonId);
+  const content = $(contentId);
+  button.addEventListener('click', () => {
+    const expanded = button.getAttribute('aria-expanded') !== 'true';
+    button.setAttribute('aria-expanded', String(expanded));
+    content.hidden = !expanded;
+    document.querySelector('.sidebar').classList.toggle(collapsedClass, !expanded);
+  });
+}
+setupSectionToggle('appsToggle', 'apps', 'apps-collapsed');
+setupSectionToggle('domainsToggle', 'hosts', 'domains-collapsed');
+for (const id of ['setupButton', 'certificateButton', 'emptySetup']) $(id).addEventListener('click', openSetup);
+$('closeSetup').addEventListener('click', () => $('setup').close());
+$('captureButton').addEventListener('click', async () => {
+  notify('');
+  const next = await action(() => state.running ? api.stop() : api.start(Number($('port').value), $('automaticProxy').checked));
+  if (next) updateState(next);
+});
+$('newButton').addEventListener('click', async () => {
+  notify('');
+  if (state.running && !await action(() => api.stop())) return;
+  await action(() => api.clear());
+  const next = await action(() => api.start(Number($('port').value), $('automaticProxy').checked));
+  if (next) updateState(next);
+});
+$('clearButton').addEventListener('click', () => action(() => api.clear()));
+$('recoverButton').addEventListener('click', () => action(async () => updateState(await api.recover())));
+$('exportButton').addEventListener('click', () => action(async () => { if (await api.export()) notify('Session exported as HAR.'); }));
+$('exportCertificate').addEventListener('click', () => action(async () => { if (await api.certificate()) { $('setup').close(); notify('Public certificate exported. Install it, then restart the browser.'); } }));
+$('copyUrl').addEventListener('click', () => action(async () => { await api.copyText(currentRecord.url); notify('Request URL copied.'); }));
+$('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; render(); });
+$('search').addEventListener('input', scheduleRender);
+$('typeFilter').addEventListener('change', render);
+$('port').addEventListener('input', () => { if (!state.running) updateState({ ...state, port: Number($('port').value) }); });
+$('automaticProxy').addEventListener('change', render);
+document.querySelectorAll('.data-tabs').forEach(nav => nav.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+  const side = nav.dataset.side; views[side] = button.dataset.view;
+  nav.querySelectorAll('button').forEach(item => item.classList.toggle('selected', item === button));
+  renderSide(side);
+})));
+document.addEventListener('keydown', event => { if (event.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !$('setup').open) { event.preventDefault(); $('search').focus(); } });
+
+api.on('record', record => {
+  records.set(record.id, record);
+  while (records.size > 200) records.delete(records.keys().next().value);
+  scheduleRender();
+  if (selectedId === record.id) loadDetail();
+});
+api.on('state', updateState);
+api.on('notice', notify);
+api.on('cleared', () => { records.clear(); selectedDomain = null; selectedApp = null; resetSelection(); render(); });
+
+action(async () => {
+  const snapshot = await api.snapshot();
+  $('footerVersion').textContent = `v${snapshot.version}`;
+  snapshot.records.forEach(record => records.set(record.id, record));
+  updateState(snapshot.state);
+  if (snapshot.notice) notify(snapshot.notice);
+  if (snapshot.state.running) $('automaticProxy').checked = snapshot.state.mode === 'automatic';
+  const mac = snapshot.platform === 'darwin';
+  $('systemGuide').textContent = mac ? 'macOS may ask for administrator permission. Existing proxy settings are restored on Pause.' : 'Windows user proxy settings are updated automatically and restored on Pause.';
+  $('trustGuide').textContent = mac ? 'Import the .crt into your login keychain, set SSL trust to Always Trust, then restart the browser.' : 'Install the .crt for Current User in Trusted Root Certification Authorities, then restart the browser.';
+  render();
+});

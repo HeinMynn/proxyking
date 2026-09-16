@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Proxyking</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="layout-overrides.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="capture-actions" role="toolbar" aria-label="Capture controls">
+      <button id="captureButton" class="icon-button primary" title="Start capture" aria-label="Start capture"><span id="captureIcon" class="capture-icon play" aria-hidden="true"></span></button>
+      <button id="clearButton" class="icon-button" title="Clear traffic" aria-label="Clear traffic">
+        <svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+        </svg>
+      </button>
+      <button id="newButton" class="icon-button" title="New session" aria-label="New session">＋</button>
+    </div>
+    <div class="app-identity"><span class="logo">P</span><strong>Proxyking</strong><span class="separator">·</span><span>Listening on <b id="headerEndpoint">Detecting network…</b></span><span class="separator">|</span><span id="headerMode">Paused</span></div>
+    <div class="status-wrap"><i id="statusIndicator" class="status-indicator paused"></i><span id="statusText">Paused</span></div>
+  </header>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <div class="workspace">
+    <aside class="sidebar domains-collapsed">
+      <div class="side-heading traffic-heading"><span>TRAFFIC</span><span class="sidebar-scope">LIVE</span></div>
+      <button class="nav active traffic-nav" id="allTraffic"><span class="nav-icon">⇄</span><span class="nav-label">All connections</span><b id="totalBadge">0</b></button>
+      <button id="appsToggle" class="side-heading section-toggle apps-heading" type="button" aria-expanded="true" aria-controls="apps">
+        <span>APPS</span><span class="section-summary"><b id="appCount">0</b><i class="section-chevron">⌄</i></span>
+      </button>
+      <div id="apps" class="apps"><p class="subtle">Apps appear as traffic arrives.</p></div>
+      <button id="domainsToggle" class="side-heading section-toggle hosts-heading" type="button" aria-expanded="false" aria-controls="hosts">
+        <span>DOMAINS</span><span class="section-summary"><b id="hostCount">0</b><i class="section-chevron">⌄</i></span>
+      </button>
+      <div id="hosts" class="hosts" hidden><p class="subtle">Domains appear as traffic arrives.</p></div>
+      <div class="side-actions">
+        <button id="setupButton" class="nav"><span class="nav-icon">⚙</span><span class="nav-label">Connection setup</span></button>
+        <button id="certificateButton" class="nav"><span class="nav-icon">◇</span><span class="nav-label">HTTPS certificate</span></button>
+        <button id="exportButton" class="nav"><span class="nav-icon">↗</span><span class="nav-label">Export HAR</span></button>
+        <button id="recoverButton" class="nav warning" hidden><span class="nav-icon">↻</span><span class="nav-label">Restore proxy settings</span></button>
+      </div>
+    </aside>
+    <main class="main-area">
+      <section class="connections-panel">
+        <div class="panel-toolbar">
+          <div><h1>Connections</h1><span id="visibleCount">0 requests</span></div>
+          <label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search URL, host, method, status…" aria-label="Search connections"><kbd>/</kbd></label>
+          <select id="typeFilter" aria-label="Filter connections"><option value="all">All traffic</option><option value="https">HTTPS</option><option value="errors">Errors</option><option value="json">JSON</option><option value="tunnels">Tunnels</option></select>
+        </div>
+        <div class="connection-table-head"><span>METHOD</span><span>HOST / PATH</span><span>STATUS</span><span>TYPE</span><span>TIME</span><span>SIZE</span></div>
+        <div id="requests" class="requests"></div>
+        <div id="empty" class="empty"><div class="empty-symbol">⇄</div><h2>Ready to capture</h2><p>Press Start, then browse normally.</p><button id="emptySetup">Connection setup</button></div>
+      </section>
+      <section class="selected-bar"><span id="selectedMethod" class="method">—</span><span id="selectedUrl" class="selected-url">Select a connection to inspect its URL</span><button id="copyUrl" title="Copy selected URL" disabled>Copy URL</button></section>
+      <section class="exchange">
+        <article class="message-panel">
+          <div class="message-heading"><div><span class="direction upload">↑</span><strong>Request</strong></div><span id="requestSummary">No request selected</span></div>
+          <nav class="data-tabs" data-side="request"><button data-view="headers" class="selected">Header</button><button data-view="query">Query</button><button data-view="body">Body</button><button data-view="raw">Raw</button></nav>
+          <div id="requestContent" class="message-content"><div class="placeholder">Select a connection above.</div></div>
+        </article>
+        <article class="message-panel">
+          <div class="message-heading"><div><span class="direction download">↓</span><strong>Response</strong></div><span id="responseSummary">No response selected</span></div>
+          <nav class="data-tabs" data-side="response"><button data-view="headers" class="selected">Header</button><button data-view="query">Query</button><button data-view="body">Body</button><button data-view="raw">Raw</button></nav>
+          <div id="responseContent" class="message-content"><div class="placeholder">Select a connection above.</div></div>
+        </article>
+      </section>
+    </main>
+  </div>
+  <footer class="network-footer">
+    <span><i id="footerStatus" class="status-indicator paused"></i><b id="routingStatus">System proxy restored</b></span>
+    <span>Requests <b id="requestCount">0</b></span><span>Sent <b id="requestTraffic">0 B</b></span><span>Received <b id="responseTraffic">0 B</b></span><span>Domains <b id="footerHosts">0</b></span><span id="footerVersion" class="footer-version">v0.3.6</span>
+  </footer>
+  <dialog id="setup">
+    <div class="dialog-heading"><div><div class="eyebrow">CONNECTION</div><h2>Capture setup</h2></div><button id="closeSetup" aria-label="Close setup">✕</button></div>
+    <div class="setup-step"><b>1</b><div><h3>Automatic network address</h3><p>Proxyking detects the private IPv4 address on your active route and listens on that interface.</p><div class="detected-address">Detected address <code id="setupEndpoint">Detecting…</code></div><label class="port-label">Proxy port <input id="port" type="number" min="1" max="65535" value="8080"></label></div></div>
+    <div class="setup-step"><b>2</b><div><h3>System proxy</h3><label class="automatic-option"><input id="automaticProxy" type="checkbox" checked> Configure system proxy automatically</label><p id="systemGuide"></p><p>Stopping, pausing, or closing Proxyking restores your previous proxy settings.</p></div></div>
+    <div class="setup-step"><b>3</b><div><h3>HTTPS inspection</h3><p>Export and trust the public certificate to inspect browser HTTPS traffic.</p><button id="exportCertificate">Export Proxyking CA</button><p id="trustGuide"></p><p>Unsupported protocols and certificate-pinned apps are passed through as encrypted tunnels.</p></div></div>
+    <div class="setup-foot">Listening on a LAN address makes the proxy reachable from that network interface while capture is running. Your firewall may ask for permission.</div>
+  </dialog>
+  <script src="renderer.js"></script>
+</body>
+</html>

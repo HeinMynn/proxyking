@@ -1,0 +1,58 @@
+{
+  "name": "proxyking",
+  "version": "0.3.12",
+  "description": "Desktop HTTP and HTTPS traffic inspector",
+  "main": "src/main.js",
+  "author": "Proxyking",
+  "license": "UNLICENSED",
+  "scripts": {
+    "postinstall": "node scripts/patch-http-mitm-proxy.js",
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "test:desktop": "node scripts/desktop-smoke.js",
+    "pack": "electron-builder --dir",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg"
+  },
+  "build": {
+    "appId": "app.proxyking.desktop",
+    "productName": "Proxyking",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools"
+    }
+  },
+  "dependencies": {
+    "http-mitm-proxy": "^1.1.0",
+    "node-forge": "^1.4.0",
+    "tldts": "^7.4.13"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "overrides": {
+    "http-mitm-proxy": {
+      "uuid": "^11.1.1"
+    }
+  }
+}
