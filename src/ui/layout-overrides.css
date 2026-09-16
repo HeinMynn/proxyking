@@ -194,13 +194,16 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
   line-height: 1.55;
 }
 
-.apps {
+.apps,
+.devices,
+.hosts {
   max-height: 24%;
   min-height: 38px;
   overflow: auto;
 }
 
 .apps,
+.devices,
 .hosts {
   padding: 3px 1px 7px;
   scrollbar-color: #33465e transparent;
@@ -212,7 +215,8 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
   flex: 0 1 auto;
 }
 
-.apps-heading { margin-top: 16px; }
+.devices-heading { margin-top: 16px; }
+.apps-heading,
 .hosts-heading { margin-top: 9px; }
 
 .section-toggle {
@@ -301,6 +305,39 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.device-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #40506a;
+  border-radius: 5px;
+  background: #182438;
+  color: #9bb8df;
+  font-size: 11px;
+}
+
+.device-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: Consolas, monospace;
+  font-size: 10px;
+}
+
+.device-traffic-count {
+  min-width: 20px;
+  margin-left: auto;
+  padding: 2px 5px;
+  border-radius: 8px;
+  background: #243348;
+  color: #aebdd0;
+  font-size: 8px;
+  text-align: center;
 }
 
 .domain-icon {

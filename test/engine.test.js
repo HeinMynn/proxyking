@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const forge = require('node-forge');
-const { CaptureEngine, bodyCollector, inferApplication, mainDomain, BODY_LIMIT } = require('../src/engine');
+const { CaptureEngine, bodyCollector, inferApplication, mainDomain, normalizeClientAddress, remoteDeviceAddress, BODY_LIMIT } = require('../src/engine');
 const { ensureCertificate } = require('../src/certificate');
 const { readAlpnProtocols, requiresPassthrough } = require('../src/tls-client-hello');
 
@@ -212,6 +212,14 @@ test('application grouping recognizes common client user agents', () => {
   assert.equal(inferApplication({ 'user-agent': 'Mozilla/5.0 Chrome/140.0 Safari/537.36' }), 'Google Chrome');
   assert.equal(inferApplication({ 'user-agent': 'PostmanRuntime/7.46.0' }), 'Postman');
   assert.equal(inferApplication({}), 'Unknown app');
+});
+
+test('remote device addresses exclude the local computer and normalize IPv4-mapped clients', () => {
+  assert.equal(normalizeClientAddress('::ffff:192.168.1.25'), '192.168.1.25');
+  assert.equal(normalizeClientAddress('::1'), '127.0.0.1');
+  assert.equal(remoteDeviceAddress('192.168.1.25', '192.168.1.10'), '192.168.1.25');
+  assert.equal(remoteDeviceAddress('192.168.1.10', '192.168.1.10'), '');
+  assert.equal(remoteDeviceAddress('127.0.0.1', '192.168.1.10'), '');
 });
 
 test('domain grouping collapses subdomains using public suffix rules', () => {

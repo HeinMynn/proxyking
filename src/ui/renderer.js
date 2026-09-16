@@ -6,6 +6,7 @@ let state = { running: false, busy: false, host: '127.0.0.1', port: 8080 };
 let selectedId = null;
 let selectedDomain = null;
 let selectedApp = null;
+let selectedDevice = null;
 let currentRecord = null;
 let renderQueued = false;
 let detailVersion = 0;
@@ -65,7 +66,7 @@ function filteredRecords() {
   const search = $('search').value.toLowerCase();
   const filter = $('typeFilter').value;
   return [...records.values()].filter(record => {
-    if (selectedDomain && (record.domain || record.host) !== selectedDomain || selectedApp && record.application !== selectedApp) return false;
+    if (selectedDomain && (record.domain || record.host) !== selectedDomain || selectedApp && record.application !== selectedApp || selectedDevice && record.remoteDevice !== selectedDevice) return false;
     if (!`${record.url} ${record.method} ${record.status || ''}`.toLowerCase().includes(search)) return false;
     return filter === 'all' || filter === 'https' && record.secure || filter === 'errors' && (record.state === 'failed' || record.status >= 400) || filter === 'json' && /json/i.test(record.contentType || '') || filter === 'tunnels' && record.tunneled;
   }).reverse();
@@ -101,25 +102,36 @@ function render() {
   $('responseTraffic').textContent = bytes(all.reduce((total, record) => total + record.size, 0));
   const hosts = [...new Set(all.map(record => record.domain || record.host))].sort();
   const apps = [...new Set(all.map(record => record.application || 'Unknown app'))].sort();
+  const devices = [...new Set(all.map(record => record.remoteDevice).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   $('hostCount').textContent = hosts.length;
   $('footerHosts').textContent = hosts.length;
   $('appCount').textContent = apps.length;
-  $('allTraffic').classList.toggle('active', !selectedDomain && !selectedApp);
+  $('deviceCount').textContent = devices.length;
+  $('allTraffic').classList.toggle('active', !selectedDomain && !selectedApp && !selectedDevice);
   $('apps').replaceChildren(...apps.map(app => {
     const button = element('button', `host-button${app === selectedApp ? ' selected' : ''}`);
     const icon = element('span', 'app-icon', app.slice(0, 1).toUpperCase());
     icon.style.setProperty('--icon-hue', colorHue(app));
     button.append(icon, element('span', 'app-name', app));
     button.title = app;
-    button.addEventListener('click', () => { selectedApp = app === selectedApp ? null : app; selectedDomain = null; render(); });
+    button.addEventListener('click', () => { selectedApp = app === selectedApp ? null : app; selectedDomain = null; selectedDevice = null; render(); });
     return button;
   }));
   if (!apps.length) $('apps').append(element('p', 'subtle', 'Apps appear as traffic arrives.'));
+  $('devices').replaceChildren(...devices.map(device => {
+    const button = element('button', `host-button device-button${device === selectedDevice ? ' selected' : ''}`);
+    const count = all.filter(record => record.remoteDevice === device).length;
+    button.append(element('span', 'device-icon', '◇'), element('span', 'device-name', device), element('span', 'device-traffic-count', String(count)));
+    button.title = `Traffic from ${device}`;
+    button.addEventListener('click', () => { selectedDevice = device === selectedDevice ? null : device; selectedApp = null; selectedDomain = null; render(); });
+    return button;
+  }));
+  if (!devices.length) $('devices').append(element('p', 'subtle', 'Remote devices appear when they use this proxy.'));
   $('hosts').replaceChildren(...hosts.map(domain => {
     const button = element('button', `host-button domain-button${domain === selectedDomain ? ' selected' : ''}`);
     button.append(element('span', 'domain-icon', '◌'), element('span', 'domain-name', domain));
     button.title = domain;
-    button.addEventListener('click', () => { selectedDomain = domain === selectedDomain ? null : domain; selectedApp = null; render(); });
+    button.addEventListener('click', () => { selectedDomain = domain === selectedDomain ? null : domain; selectedApp = null; selectedDevice = null; render(); });
     return button;
   }));
   if (!hosts.length) $('hosts').append(element('p', 'subtle', 'Domains appear as traffic arrives.'));
@@ -211,6 +223,7 @@ function setupSectionToggle(buttonId, contentId, collapsedClass) {
   });
 }
 setupSectionToggle('appsToggle', 'apps', 'apps-collapsed');
+setupSectionToggle('devicesToggle', 'devices', 'devices-collapsed');
 setupSectionToggle('domainsToggle', 'hosts', 'domains-collapsed');
 for (const id of ['setupButton', 'certificateButton', 'emptySetup']) $(id).addEventListener('click', openSetup);
 $('closeSetup').addEventListener('click', () => $('setup').close());
@@ -231,7 +244,7 @@ $('recoverButton').addEventListener('click', () => action(async () => updateStat
 $('exportButton').addEventListener('click', () => action(async () => { if (await api.export()) notify('Session exported as HAR.'); }));
 $('exportCertificate').addEventListener('click', () => action(async () => { if (await api.certificate()) { $('setup').close(); notify('Public certificate exported. Install it, then restart the browser.'); } }));
 $('copyUrl').addEventListener('click', () => action(async () => { await api.copyText(currentRecord.url); notify('Request URL copied.'); }));
-$('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; render(); });
+$('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; selectedDevice = null; render(); });
 $('search').addEventListener('input', scheduleRender);
 $('typeFilter').addEventListener('change', render);
 $('port').addEventListener('input', () => { if (!state.running) updateState({ ...state, port: Number($('port').value) }); });
@@ -251,7 +264,7 @@ api.on('record', record => {
 });
 api.on('state', updateState);
 api.on('notice', notify);
-api.on('cleared', () => { records.clear(); selectedDomain = null; selectedApp = null; resetSelection(); render(); });
+api.on('cleared', () => { records.clear(); selectedDomain = null; selectedApp = null; selectedDevice = null; resetSelection(); render(); });
 
 action(async () => {
   const snapshot = await api.snapshot();

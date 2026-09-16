@@ -42,7 +42,7 @@ class InspectionProxy extends Proxy {
     }
     socket.pause();
     const upstream = net.connect({ host: target.hostname, port, allowHalfOpen: true }, () => {
-      this.onPassthrough?.({ host: target.hostname, port, protocols: readAlpnProtocols(head) || [], reason: rejectedCertificate ? 'certificate-rejected' : 'unsupported-alpn' });
+      this.onPassthrough?.({ host: target.hostname, port, protocols: readAlpnProtocols(head) || [], reason: rejectedCertificate ? 'certificate-rejected' : 'unsupported-alpn', clientAddress: socket.remoteAddress });
       socket.pipe(upstream);
       upstream.pipe(socket);
       upstream.write(head);

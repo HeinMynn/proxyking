@@ -27,6 +27,10 @@
     <aside class="sidebar domains-collapsed">
       <div class="side-heading traffic-heading"><span>TRAFFIC</span><span class="sidebar-scope">LIVE</span></div>
       <button class="nav active traffic-nav" id="allTraffic"><span class="nav-icon">⇄</span><span class="nav-label">All connections</span><b id="totalBadge">0</b></button>
+      <button id="devicesToggle" class="side-heading section-toggle devices-heading" type="button" aria-expanded="true" aria-controls="devices">
+        <span>REMOTE DEVICES</span><span class="section-summary"><b id="deviceCount">0</b><i class="section-chevron">⌄</i></span>
+      </button>
+      <div id="devices" class="devices"><p class="subtle">Remote devices appear when they use this proxy.</p></div>
       <button id="appsToggle" class="side-heading section-toggle apps-heading" type="button" aria-expanded="true" aria-controls="apps">
         <span>APPS</span><span class="section-summary"><b id="appCount">0</b><i class="section-chevron">⌄</i></span>
       </button>

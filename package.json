@@ -1,6 +1,6 @@
 {
   "name": "proxyking",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Desktop HTTP and HTTPS traffic inspector",
   "main": "src/main.js",
   "author": "Proxyking",

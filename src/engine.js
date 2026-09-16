@@ -1,5 +1,6 @@
 const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
+const net = require('node:net');
 const { InspectionProxy } = require('./inspection-proxy');
 const zlib = require('node:zlib');
 const { getDomain } = require('tldts');
@@ -12,6 +13,20 @@ const RECORD_LIMIT = 200;
 function mainDomain(hostname = '') {
   const normalized = String(hostname).toLowerCase().replace(/\.$/, '');
   return getDomain(normalized) || normalized;
+}
+
+function normalizeClientAddress(address = '') {
+  const value = String(address).split('%')[0];
+  if (value === '::1') return '127.0.0.1';
+  if (value.startsWith('::ffff:') && net.isIP(value.slice(7)) === 4) return value.slice(7);
+  return value;
+}
+
+function remoteDeviceAddress(address, listeningHost) {
+  const client = normalizeClientAddress(address);
+  const local = normalizeClientAddress(listeningHost);
+  if (!client || client === local || client === '127.0.0.1' || client === '0.0.0.0' || client === '::') return '';
+  return client;
 }
 
 function inferApplication(headers = {}) {
@@ -108,6 +123,7 @@ class CaptureEngine extends EventEmitter {
       });
       proxy.onRequest((ctx, callback) => {
         const req = ctx.clientToProxyRequest;
+        const clientAddress = normalizeClientAddress(ctx.connectRequest?.socket?.remoteAddress || req.socket?.remoteAddress);
         let url;
         try { url = new URL(req.url, `${ctx.isSSL ? 'https' : 'http'}://${req.headers.host}`); }
         catch { return callback(new Error('Invalid request URL')); }
@@ -118,7 +134,7 @@ class CaptureEngine extends EventEmitter {
         const record = {
           id: randomUUID(), startedAt: Date.now(), method: req.method, url: url.href,
           host: url.host, domain: mainDomain(url.hostname), path: url.pathname + url.search, secure: ctx.isSSL,
-          application: inferApplication(req.headers),
+          application: inferApplication(req.headers), remoteDevice: remoteDeviceAddress(clientAddress, this.state.host),
           status: null, state: 'pending', duration: null, size: 0,
           requestSize: 0,
           requestHeaders: { ...req.headers }, responseHeaders: {},
@@ -175,13 +191,13 @@ class CaptureEngine extends EventEmitter {
       throw error;
     } finally { this.busy = false; }
   }
-  addPassthrough({ host, port, protocols, reason }) {
+  addPassthrough({ host, port, protocols, reason, clientAddress }) {
     const certificateRejected = reason === 'certificate-rejected';
     const startedAt = Date.now();
     const record = {
       id: randomUUID(), startedAt, method: 'TUNNEL', url: `tls://${host}:${port}`,
       host: `${host}:${port}`, domain: mainDomain(host), path: 'Encrypted pass-through', secure: true, tunneled: true,
-      application: 'Unknown app',
+      application: 'Unknown app', remoteDevice: remoteDeviceAddress(clientAddress, this.state.host),
       status: 200, state: 'complete', duration: 0, size: 0,
       requestSize: 0,
       contentType: '', requestHeaders: { 'tls-alpn': protocols.join(', ') }, responseHeaders: {},
@@ -220,4 +236,4 @@ class CaptureEngine extends EventEmitter {
     })) } };
   }
 }
-module.exports = { CaptureEngine, bodyCollector, inferApplication, mainDomain, BODY_LIMIT, RECORD_LIMIT };
+module.exports = { CaptureEngine, bodyCollector, inferApplication, mainDomain, normalizeClientAddress, remoteDeviceAddress, BODY_LIMIT, RECORD_LIMIT };
