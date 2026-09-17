@@ -45,7 +45,7 @@ curl.exe --proxy http://192.168.1.42:8080 --cacert Proxyking-CA.crt https://exam
 
 Each installation generates its own **Proxyking Local CA**, valid for one year. Only the public certificate is exported. The private key stays in the Electron user-data directory (`%APPDATA%/Proxyking/certificates` on Windows, `~/Library/Application Support/Proxyking/certificates` on macOS; actual directory casing follows Electron's app name).
 
-**Windows:** Open the exported `.crt`, select Install Certificate → Current User → Place all certificates in the following store → Trusted Root Certification Authorities. Remove it later using `certmgr.msc` in the same store. Automatic mode handles your proxy settings; manual settings are in Settings → Network & internet → Proxy → Manual proxy setup.
+**Windows:** Click **Install & Trust CA** to add the public CA to the current user's Trusted Root Certification Authorities store; Windows may show a security confirmation. Use **Revoke & Remove CA** to delete the exact matching certificate. Alternatively, export the `.crt` and install it manually for Current User. Automatic mode handles your proxy settings; manual settings are in Settings → Network & internet → Proxy → Manual proxy setup.
 
 **macOS:** Click **Install & Trust CA** to add the public CA to your login keychain with SSL trust. Use **Revoke & Remove CA** to remove the exact matching CA and its user trust settings. Alternatively, export the `.crt`, import it with Keychain Access, open **Proxyking Local CA**, expand Trust, and set Secure Sockets Layer (SSL) to Always Trust. System-wide one-click installation or removal requires a separately signed privileged helper and is not part of the current development build. Automatic mode handles Web Proxy (HTTP) and Secure Web Proxy (HTTPS); manual settings are in System Settings → Network → your connection → Details → Proxies.
 
@@ -61,7 +61,7 @@ After such a rejection, Proxyking learns that host for the current capture sessi
 - Requests remain in memory until Clear, New, or application exit. Up to 128 KiB is retained per request/response body preview; the full payload is forwarded. Compressed previews are decoded within the same bound; binary bodies use base64.
 - Sessions are not persisted unless exported. HAR files contain captured headers, cookies, and payloads, including any credentials in them. Truncation is marked with custom HAR fields. Timing is total elapsed time, not a DNS/TLS phase breakdown.
 - WebSocket frame inspection, replay, breakpoints, mobile apps, and pinning bypass are not implemented.
-- Trust/certificate setup is manual. Do not share the private CA key. Certificates are not automatically renewed; remove the trusted CA and regenerate local certificate data when it expires.
+- Certificate trust can be installed and removed automatically for the current user on Windows and macOS. Linux remains manual. Do not share the private CA key. Certificates are not automatically renewed; remove the trusted CA and regenerate local certificate data when it expires.
 - Closing the app restores settings changed by automatic mode before stopping its listener. Restore manually configured app proxy settings yourself.
 
 ## Test and package

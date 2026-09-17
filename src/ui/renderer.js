@@ -43,7 +43,7 @@ function showCertificateStatus(status) {
   $('removeCertificate').disabled = !['trusted', 'untrusted'].includes(status.state);
   modal.textContent = status.state === 'trusted' ? '✓ Proxyking CA is installed and trusted for SSL.'
     : status.state === 'untrusted' ? 'Proxyking CA is installed but is not trusted for SSL.'
-      : status.state === 'missing' ? 'Proxyking CA is not installed in your keychains.'
+      : status.state === 'missing' ? 'Proxyking CA is not installed in your user trust store.'
         : 'Certificate trust must be configured manually on this platform.';
   modal.className = `certificate-status-detail ${status.state}`;
 }
@@ -319,10 +319,12 @@ action(async () => {
   if (snapshot.notice) notify(snapshot.notice);
   if (snapshot.state.running) $('automaticProxy').checked = snapshot.state.mode === 'automatic';
   const mac = snapshot.platform === 'darwin';
-  $('trustCertificate').hidden = !mac;
-  $('removeCertificate').hidden = !mac;
+  const windows = snapshot.platform === 'win32';
+  const automaticCertificateTrust = mac || windows;
+  $('trustCertificate').hidden = !automaticCertificateTrust;
+  $('removeCertificate').hidden = !automaticCertificateTrust;
   $('systemGuide').textContent = mac ? 'macOS may ask for administrator permission. Existing proxy settings are restored on Stop.' : 'Windows user proxy settings are updated automatically and restored on Stop.';
-  $('trustGuide').textContent = mac ? 'Install & Trust adds the CA to your login keychain with SSL trust. System-wide automatic installation requires a signed privileged helper.' : 'Install the exported .crt for Current User in Trusted Root Certification Authorities, then restart the browser.';
+  $('trustGuide').textContent = mac ? 'Install & Trust adds the CA to your login keychain with SSL trust. System-wide automatic installation requires a signed privileged helper.' : windows ? 'Install & Trust adds the CA to your Current User Trusted Root Certification Authorities store. Windows may show a security confirmation.' : 'Install the exported CA in your system or browser trust store, then restart the browser.';
   await refreshCertificateStatus();
   render();
 });

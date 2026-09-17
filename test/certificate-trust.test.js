@@ -4,7 +4,10 @@ const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { X509Certificate } = require('node:crypto');
-const { installMacCertificate, removeMacCertificate, macCertificateTrustStatus } = require('../src/certificate-trust');
+const {
+  installMacCertificate, removeMacCertificate, macCertificateTrustStatus,
+  installWindowsCertificate, removeWindowsCertificate, windowsCertificateTrustStatus
+} = require('../src/certificate-trust');
 const { ensureCertificate } = require('../src/certificate');
 
 async function certificateFixture(t) {
@@ -80,4 +83,45 @@ test('certificate removal revokes trust and deletes only the exact login-keychai
   assert.deepEqual(result, { removed: true, systemCopy: false });
   assert.ok(calls.some(call => call.args[0] === 'remove-trusted-cert' && call.args[1] === certificatePath));
   assert.ok(calls.some(call => call.args[0] === 'delete-certificate' && call.args[2] === fingerprint && call.args[3] === loginKeychain));
+});
+
+test('Windows CA installation uses only the current-user Root store and verifies the exact thumbprint', async t => {
+  const { certificatePath, pem } = await certificateFixture(t);
+  const fingerprint = new X509Certificate(pem).fingerprint.replaceAll(':', '');
+  const calls = [];
+  const execute = async (file, args, options) => { calls.push({ file, args, options }); return ''; };
+  assert.equal(await installWindowsCertificate(certificatePath, execute), true);
+  assert.deepEqual(calls, [
+    { file: 'certutil.exe', args: ['-user', '-f', '-addstore', 'Root', certificatePath], options: { timeout: 120000 } },
+    { file: 'certutil.exe', args: ['-user', '-store', 'Root', fingerprint], options: { timeout: 30000 } }
+  ]);
+});
+
+test('Windows certificate status reports trusted only when certutil finds the exact thumbprint', async t => {
+  const { certificatePath, pem } = await certificateFixture(t);
+  const fingerprint = new X509Certificate(pem).fingerprint.replaceAll(':', '');
+  const trusted = await windowsCertificateTrustStatus(certificatePath, async (file, args) => {
+    assert.equal(file, 'certutil.exe');
+    assert.deepEqual(args, ['-user', '-store', 'Root', fingerprint]);
+    return '';
+  });
+  assert.deepEqual(trusted, { state: 'trusted', label: 'Installed & trusted' });
+  const missing = await windowsCertificateTrustStatus(certificatePath, async () => { throw new Error('not found'); });
+  assert.deepEqual(missing, { state: 'missing', label: 'Not installed' });
+});
+
+test('Windows certificate removal deletes only the exact current-user Root thumbprint and verifies removal', async t => {
+  const { certificatePath, pem } = await certificateFixture(t);
+  const fingerprint = new X509Certificate(pem).fingerprint.replaceAll(':', '');
+  const calls = [];
+  let removed = false;
+  const result = await removeWindowsCertificate(certificatePath, async (file, args, options) => {
+    calls.push({ file, args, options });
+    if (args[1] === '-delstore') removed = true;
+    if (args[1] === '-store' && removed) throw new Error('not found');
+    return '';
+  });
+  assert.deepEqual(result, { removed: true, systemCopy: false });
+  assert.ok(calls.some(call => call.file === 'certutil.exe' && call.args.join(' ') === `-user -delstore Root ${fingerprint}`));
+  assert.equal(calls.filter(call => call.args[1] === '-store').length, 2);
 });
