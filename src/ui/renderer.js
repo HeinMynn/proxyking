@@ -2,7 +2,7 @@ const api = window.proxyking;
 const $ = id => document.getElementById(id);
 const records = new Map();
 const views = { request: 'headers', response: 'headers' };
-let state = { running: false, busy: false, host: '127.0.0.1', port: 8080 };
+let state = { running: false, paused: false, busy: false, host: '127.0.0.1', port: 8080 };
 let selectedId = null;
 let selectedDomain = null;
 let selectedApp = null;
@@ -33,16 +33,34 @@ function notify(message) {
 }
 async function action(fn) { try { return await fn(); } catch (error) { notify(error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); return null; } }
 
+function showCertificateStatus(status) {
+  if (!status) return;
+  const sidebar = $('certificateStatusSidebar');
+  const modal = $('certificateStatusModal');
+  sidebar.className = `certificate-status-dot ${status.state}`;
+  sidebar.title = status.label;
+  sidebar.setAttribute('aria-label', `Certificate status: ${status.label}`);
+  $('removeCertificate').disabled = !['trusted', 'untrusted'].includes(status.state);
+  modal.textContent = status.state === 'trusted' ? '✓ Proxyking CA is installed and trusted for SSL.'
+    : status.state === 'untrusted' ? 'Proxyking CA is installed but is not trusted for SSL.'
+      : status.state === 'missing' ? 'Proxyking CA is not installed in your keychains.'
+        : 'Certificate trust must be configured manually on this platform.';
+  modal.className = `certificate-status-detail ${status.state}`;
+}
+async function refreshCertificateStatus() {
+  const status = await action(() => api.certificateStatus());
+  if (status) showCertificateStatus(status);
+}
+
 function updateState(next) {
   state = next;
-  const mode = state.busy ? 'Updating' : state.running ? 'Running' : 'Paused';
-  const className = `status-indicator ${state.busy ? 'busy' : state.running ? '' : 'paused'}`;
+  const mode = state.busy ? 'Updating' : !state.running ? 'Stopped' : state.paused ? 'Paused' : 'Running';
+  const className = `status-indicator ${state.busy ? 'busy' : state.running && !state.paused ? '' : 'paused'}`;
   $('statusIndicator').className = className;
   $('footerStatus').className = className;
   $('statusText').textContent = mode;
-  $('headerMode').textContent = mode;
-  $('captureIcon').className = `capture-icon ${state.running ? 'pause' : 'play'}`;
-  $('captureButton').title = state.running ? 'Pause capture' : 'Start capture';
+  $('captureIcon').className = `capture-icon ${state.running && !state.paused ? 'pause' : 'play'}`;
+  $('captureButton').title = !state.running ? 'Start capture' : state.paused ? 'Resume capture' : 'Pause capture';
   $('captureButton').setAttribute('aria-label', $('captureButton').title);
   const endpoint = `${state.host || '127.0.0.1'}:${state.port}`;
   $('headerEndpoint').textContent = endpoint;
@@ -50,10 +68,11 @@ function updateState(next) {
   $('port').disabled = state.running || state.busy;
   $('automaticProxy').disabled = state.running || state.busy || state.recoveryPending;
   $('captureButton').disabled = state.busy || (!state.running && state.recoveryPending);
+  $('stopButton').disabled = state.busy || !state.running;
   $('newButton').disabled = state.busy || state.recoveryPending && !state.systemProxy;
   $('recoverButton').hidden = !state.recoveryPending || state.running;
   $('recoverButton').disabled = state.busy;
-  $('routingStatus').textContent = state.busy ? 'Updating system proxy…' : state.recoveryPending && !state.systemProxy ? 'Proxy recovery needed' : state.systemProxy ? `System proxy → ${endpoint}` : state.running ? `Manual proxy → ${endpoint}` : 'System proxy restored';
+  $('routingStatus').textContent = state.busy ? 'Updating system proxy…' : state.recoveryPending && !state.systemProxy ? 'Proxy recovery needed' : state.systemProxy ? `System proxy → ${endpoint}${state.paused ? ' · capture paused' : ''}` : state.running ? `Manual proxy → ${endpoint}${state.paused ? ' · capture paused' : ''}` : 'System proxy restored';
 }
 
 function scheduleRender() {
@@ -93,8 +112,8 @@ function render() {
   });
   $('requests').replaceChildren(...rows);
   $('empty').hidden = visible.length > 0;
-  $('empty').querySelector('h2').textContent = all.length ? 'No matching connections' : state.running ? 'Waiting for traffic' : 'Ready to capture';
-  $('empty').querySelector('p').textContent = all.length ? 'Change the domain, search, or filter.' : state.running ? 'Browse normally to populate this list.' : 'Press Start, then browse normally.';
+  $('empty').querySelector('h2').textContent = all.length ? 'No matching connections' : state.paused ? 'Capture paused' : state.running ? 'Waiting for traffic' : 'Ready to capture';
+  $('empty').querySelector('p').textContent = all.length ? 'Change the domain, search, or filter.' : state.paused ? 'Traffic continues through Proxyking without being recorded.' : state.running ? 'Browse normally to populate this list.' : 'Press Start, then browse normally.';
   $('requestCount').textContent = all.length;
   $('totalBadge').textContent = all.length;
   $('visibleCount').textContent = `${visible.length} of ${all.length} requests`;
@@ -144,6 +163,7 @@ function resetSelection() {
   $('selectedUrl').textContent = 'Select a connection to inspect its URL';
   $('selectedUrl').title = '';
   $('copyUrl').disabled = true;
+  $('exportSelected').disabled = true;
   $('requestSummary').textContent = 'No request selected';
   $('responseSummary').textContent = 'No response selected';
   $('requestContent').replaceChildren(element('div', 'placeholder', 'Select a connection above.'));
@@ -159,6 +179,7 @@ async function loadDetail() {
   $('selectedUrl').textContent = detail.url;
   $('selectedUrl').title = detail.url;
   $('copyUrl').disabled = false;
+  $('exportSelected').disabled = false;
   $('requestSummary').textContent = `${bytes(detail.requestBody?.size)} · ${Object.keys(detail.requestHeaders || {}).length} headers`;
   $('responseSummary').textContent = `${detail.status || detail.state} · ${bytes(detail.size)} · ${detail.duration ?? '…'} ms`;
   renderMessages();
@@ -188,7 +209,7 @@ function prettyBody(body, pending) {
 function rawMessage(side, record) {
   const request = side === 'request';
   const headers = request ? record.requestHeaders : record.responseHeaders;
-  const first = request ? `${record.method} ${record.path} HTTP/1.1` : `HTTP/1.1 ${record.status || 0}`;
+  const first = request ? `${record.method} ${record.path} ${record.httpVersion || 'HTTP/1.1'}` : `${record.httpVersion || 'HTTP/1.1'} ${record.status || 0}`;
   const lines = Object.entries(headers || {}).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`);
   const body = request ? record.requestBody : record.responseBody;
   return [first, ...lines, '', body?.text || ''].join('\n');
@@ -211,7 +232,7 @@ function renderSide(side) {
 }
 function renderMessages() { renderSide('request'); renderSide('response'); }
 
-function openSetup() { $('setup').showModal(); }
+function openSetup() { $('setup').showModal(); refreshCertificateStatus(); }
 function setupSectionToggle(buttonId, contentId, collapsedClass) {
   const button = $(buttonId);
   const content = $(contentId);
@@ -229,7 +250,12 @@ for (const id of ['setupButton', 'certificateButton', 'emptySetup']) $(id).addEv
 $('closeSetup').addEventListener('click', () => $('setup').close());
 $('captureButton').addEventListener('click', async () => {
   notify('');
-  const next = await action(() => state.running ? api.stop() : api.start(Number($('port').value), $('automaticProxy').checked));
+  const next = await action(() => !state.running ? api.start(Number($('port').value), $('automaticProxy').checked) : state.paused ? api.resume() : api.pause());
+  if (next) updateState(next);
+});
+$('stopButton').addEventListener('click', async () => {
+  notify('');
+  const next = await action(() => api.stop());
   if (next) updateState(next);
 });
 $('newButton').addEventListener('click', async () => {
@@ -242,7 +268,27 @@ $('newButton').addEventListener('click', async () => {
 $('clearButton').addEventListener('click', () => action(() => api.clear()));
 $('recoverButton').addEventListener('click', () => action(async () => updateState(await api.recover())));
 $('exportButton').addEventListener('click', () => action(async () => { if (await api.export()) notify('Session exported as HAR.'); }));
+$('exportSelected').addEventListener('click', () => action(async () => { if (currentRecord && await api.export(currentRecord.id)) notify('Selected request exported as HAR.'); }));
 $('exportCertificate').addEventListener('click', () => action(async () => { if (await api.certificate()) { $('setup').close(); notify('Public certificate exported. Install it, then restart the browser.'); } }));
+$('trustCertificate').addEventListener('click', () => action(async () => {
+  $('trustCertificate').disabled = true;
+  try {
+    if (await api.trustCertificate()) {
+      await refreshCertificateStatus();
+      notify('Proxyking CA installed and trusted for this user. Restart browsers and apps to use it.');
+    }
+  } finally { $('trustCertificate').disabled = false; }
+}));
+$('removeCertificate').addEventListener('click', () => action(async () => {
+  $('removeCertificate').disabled = true;
+  try {
+    const result = await api.removeCertificate();
+    if (!result?.canceled) {
+      await refreshCertificateStatus();
+      notify(result.systemCopy ? 'Login-keychain CA removed. A matching System-keychain copy remains; remove it with Keychain Access.' : result.removed ? 'Proxyking CA trust revoked and certificate removed. Restart browsers and apps.' : 'Proxyking CA was not present in the login keychain.');
+    }
+  } finally { await refreshCertificateStatus(); }
+}));
 $('copyUrl').addEventListener('click', () => action(async () => { await api.copyText(currentRecord.url); notify('Request URL copied.'); }));
 $('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; selectedDevice = null; render(); });
 $('search').addEventListener('input', scheduleRender);
@@ -258,7 +304,6 @@ document.addEventListener('keydown', event => { if (event.key === '/' && !['INPU
 
 api.on('record', record => {
   records.set(record.id, record);
-  while (records.size > 200) records.delete(records.keys().next().value);
   scheduleRender();
   if (selectedId === record.id) loadDetail();
 });
@@ -274,7 +319,10 @@ action(async () => {
   if (snapshot.notice) notify(snapshot.notice);
   if (snapshot.state.running) $('automaticProxy').checked = snapshot.state.mode === 'automatic';
   const mac = snapshot.platform === 'darwin';
-  $('systemGuide').textContent = mac ? 'macOS may ask for administrator permission. Existing proxy settings are restored on Pause.' : 'Windows user proxy settings are updated automatically and restored on Pause.';
-  $('trustGuide').textContent = mac ? 'Import the .crt into your login keychain, set SSL trust to Always Trust, then restart the browser.' : 'Install the .crt for Current User in Trusted Root Certification Authorities, then restart the browser.';
+  $('trustCertificate').hidden = !mac;
+  $('removeCertificate').hidden = !mac;
+  $('systemGuide').textContent = mac ? 'macOS may ask for administrator permission. Existing proxy settings are restored on Stop.' : 'Windows user proxy settings are updated automatically and restored on Stop.';
+  $('trustGuide').textContent = mac ? 'Install & Trust adds the CA to your login keychain with SSL trust. System-wide automatic installation requires a signed privileged helper.' : 'Install the exported .crt for Current User in Trusted Root Certification Authorities, then restart the browser.';
+  await refreshCertificateStatus();
   render();
 });

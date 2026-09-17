@@ -22,12 +22,15 @@
       "package.json"
     ],
     "directories": {
+      "buildResources": "build",
       "output": "release"
     },
     "win": {
+      "icon": "icon.png",
       "target": "nsis"
     },
     "mac": {
+      "icon": "icon.png",
       "target": [
         {
           "target": "dmg",

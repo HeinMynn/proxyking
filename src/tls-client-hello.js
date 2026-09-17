@@ -47,7 +47,7 @@ function readAlpnProtocols(buffer) {
 
 function requiresPassthrough(buffer) {
   const protocols = readAlpnProtocols(buffer);
-  return Array.isArray(protocols) && protocols.length > 0 && !protocols.includes('http/1.1');
+  return Array.isArray(protocols) && protocols.length > 0 && !protocols.some(protocol => protocol === 'h2' || protocol === 'http/1.1');
 }
 
 module.exports = { readAlpnProtocols, requiresPassthrough };

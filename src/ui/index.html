@@ -12,6 +12,7 @@
   <header class="app-header">
     <div class="capture-actions" role="toolbar" aria-label="Capture controls">
       <button id="captureButton" class="icon-button primary" title="Start capture" aria-label="Start capture"><span id="captureIcon" class="capture-icon play" aria-hidden="true"></span></button>
+      <button id="stopButton" class="icon-button stop-button" title="Stop capture and restore proxy settings" aria-label="Stop capture and restore proxy settings" disabled><span class="stop-icon" aria-hidden="true"></span></button>
       <button id="clearButton" class="icon-button" title="Clear traffic" aria-label="Clear traffic">
         <svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -19,8 +20,8 @@
       </button>
       <button id="newButton" class="icon-button" title="New session" aria-label="New session">＋</button>
     </div>
-    <div class="app-identity"><span class="logo">P</span><strong>Proxyking</strong><span class="separator">·</span><span>Listening on <b id="headerEndpoint">Detecting network…</b></span><span class="separator">|</span><span id="headerMode">Paused</span></div>
-    <div class="status-wrap"><i id="statusIndicator" class="status-indicator paused"></i><span id="statusText">Paused</span></div>
+    <div class="app-identity"><img class="logo" src="../assets/icon.png" alt=""><strong>Proxyking</strong><span class="separator">·</span><span>Listening on <b id="headerEndpoint">Detecting network…</b></span></div>
+    <div class="status-wrap"><i id="statusIndicator" class="status-indicator paused"></i><span id="statusText">Stopped</span></div>
   </header>
   <div id="notice" class="notice" role="status" hidden></div>
   <div class="workspace">
@@ -41,7 +42,7 @@
       <div id="hosts" class="hosts" hidden><p class="subtle">Domains appear as traffic arrives.</p></div>
       <div class="side-actions">
         <button id="setupButton" class="nav"><span class="nav-icon">⚙</span><span class="nav-label">Connection setup</span></button>
-        <button id="certificateButton" class="nav"><span class="nav-icon">◇</span><span class="nav-label">HTTPS certificate</span></button>
+        <button id="certificateButton" class="nav"><span class="nav-icon">◇</span><span class="nav-label">HTTPS certificate</span><i id="certificateStatusSidebar" class="certificate-status-dot checking" title="Checking certificate trust" aria-label="Checking certificate trust"></i></button>
         <button id="exportButton" class="nav"><span class="nav-icon">↗</span><span class="nav-label">Export HAR</span></button>
         <button id="recoverButton" class="nav warning" hidden><span class="nav-icon">↻</span><span class="nav-label">Restore proxy settings</span></button>
       </div>
@@ -57,7 +58,7 @@
         <div id="requests" class="requests"></div>
         <div id="empty" class="empty"><div class="empty-symbol">⇄</div><h2>Ready to capture</h2><p>Press Start, then browse normally.</p><button id="emptySetup">Connection setup</button></div>
       </section>
-      <section class="selected-bar"><span id="selectedMethod" class="method">—</span><span id="selectedUrl" class="selected-url">Select a connection to inspect its URL</span><button id="copyUrl" title="Copy selected URL" disabled>Copy URL</button></section>
+      <section class="selected-bar"><span id="selectedMethod" class="method">—</span><span id="selectedUrl" class="selected-url">Select a connection to inspect its URL</span><button id="exportSelected" title="Export selected request as HAR" disabled>Export HAR</button><button id="copyUrl" title="Copy selected URL" disabled>Copy URL</button></section>
       <section class="exchange">
         <article class="message-panel">
           <div class="message-heading"><div><span class="direction upload">↑</span><strong>Request</strong></div><span id="requestSummary">No request selected</span></div>
@@ -79,8 +80,8 @@
   <dialog id="setup">
     <div class="dialog-heading"><div><div class="eyebrow">CONNECTION</div><h2>Capture setup</h2></div><button id="closeSetup" aria-label="Close setup">✕</button></div>
     <div class="setup-step"><b>1</b><div><h3>Automatic network address</h3><p>Proxyking detects the private IPv4 address on your active route and listens on that interface.</p><div class="detected-address">Detected address <code id="setupEndpoint">Detecting…</code></div><label class="port-label">Proxy port <input id="port" type="number" min="1" max="65535" value="8080"></label></div></div>
-    <div class="setup-step"><b>2</b><div><h3>System proxy</h3><label class="automatic-option"><input id="automaticProxy" type="checkbox" checked> Configure system proxy automatically</label><p id="systemGuide"></p><p>Stopping, pausing, or closing Proxyking restores your previous proxy settings.</p></div></div>
-    <div class="setup-step"><b>3</b><div><h3>HTTPS inspection</h3><p>Export and trust the public certificate to inspect browser HTTPS traffic.</p><button id="exportCertificate">Export Proxyking CA</button><p id="trustGuide"></p><p>Unsupported protocols and certificate-pinned apps are passed through as encrypted tunnels.</p></div></div>
+    <div class="setup-step"><b>2</b><div><h3>System proxy</h3><label class="automatic-option"><input id="automaticProxy" type="checkbox" checked> Configure system proxy automatically</label><p id="systemGuide"></p><p>Pause stops recording while keeping traffic routed through Proxyking. Stop or closing Proxyking restores your previous proxy settings.</p></div></div>
+    <div class="setup-step"><b>3</b><div><h3>HTTPS inspection</h3><p>Install and trust the public certificate to inspect browser HTTPS traffic.</p><p id="certificateStatusModal" class="certificate-status-detail checking">Checking certificate trust…</p><div class="certificate-actions"><button id="trustCertificate">Install &amp; Trust CA</button><button id="exportCertificate">Export Proxyking CA</button><button id="removeCertificate" class="danger-button">Revoke &amp; Remove CA</button></div><p id="trustGuide"></p><p>Unsupported protocols and certificate-pinned apps are passed through as encrypted tunnels.</p></div></div>
     <div class="setup-foot">Listening on a LAN address makes the proxy reachable from that network interface while capture is running. Your firewall may ask for permission.</div>
   </dialog>
   <script src="renderer.js"></script>

@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const https = require('node:https');
+const http2 = require('node:http2');
 const tls = require('node:tls');
 const net = require('node:net');
 const fs = require('node:fs/promises');
@@ -12,6 +13,7 @@ const forge = require('node-forge');
 const { CaptureEngine, bodyCollector, inferApplication, mainDomain, normalizeClientAddress, remoteDeviceAddress, BODY_LIMIT } = require('../src/engine');
 const { ensureCertificate } = require('../src/certificate');
 const { readAlpnProtocols, requiresPassthrough } = require('../src/tls-client-hello');
+const { isCertificateRejection, isIncompatibleTls, isExpectedSocketClosure, parseConnectTarget } = require('../src/inspection-proxy');
 
 async function fixture(t, options = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-test-'));
@@ -50,17 +52,38 @@ function secureRequest(proxyPort, targetPort, ca, proxyHost = '127.0.0.1') {
     connect.end();
   });
 }
-function secureAlpnTunnel(proxyPort, targetPort, ca) {
+function secureAlpnTunnel(proxyPort, targetPort, ca, protocol = 'h2') {
+  return new Promise((resolve, reject) => {
+    const connect = http.request({ host: '127.0.0.1', port: proxyPort, method: 'CONNECT', path: `localhost:${targetPort}` });
+    connect.on('error', reject);
+    connect.on('connect', (_res, socket) => {
+      const secure = tls.connect({ socket, servername: 'localhost', ca, ALPNProtocols: [protocol] });
+      const chunks = [];
+      secure.on('secureConnect', () => assert.equal(secure.alpnProtocol, protocol));
+      secure.on('data', chunk => chunks.push(chunk));
+      secure.on('error', reject);
+      secure.on('end', () => resolve(Buffer.concat(chunks).toString()));
+    });
+    connect.end();
+  });
+}
+function secureHttp2Request(proxyPort, targetPort, ca) {
   return new Promise((resolve, reject) => {
     const connect = http.request({ host: '127.0.0.1', port: proxyPort, method: 'CONNECT', path: `localhost:${targetPort}` });
     connect.on('error', reject);
     connect.on('connect', (_res, socket) => {
       const secure = tls.connect({ socket, servername: 'localhost', ca, ALPNProtocols: ['h2'] });
-      const chunks = [];
-      secure.on('secureConnect', () => assert.equal(secure.alpnProtocol, 'h2'));
-      secure.on('data', chunk => chunks.push(chunk));
       secure.on('error', reject);
-      secure.on('end', () => resolve(Buffer.concat(chunks).toString()));
+      secure.once('secureConnect', () => {
+        const client = http2.connect(`https://localhost:${targetPort}`, { createConnection: () => secure });
+        client.on('error', reject);
+        const req = client.request({ ':path': '/playlist.m3u8', accept: '*/*' });
+        const chunks = [];
+        req.on('data', chunk => chunks.push(chunk));
+        req.on('error', reject);
+        req.on('end', () => { client.close(); resolve(Buffer.concat(chunks).toString()); });
+        req.end();
+      });
     });
     connect.end();
   });
@@ -114,7 +137,8 @@ test('HTTPS inspection reaches its internal listener when the proxy uses a non-d
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await ensureCertificate(root);
   const ca = await fs.readFile(path.join(root, 'certs', 'ca.pem'));
-  const proxyHost = '127.0.0.2';
+  const proxyHost = Object.values(os.networkInterfaces()).flat().find(item => item?.family === 'IPv4' && !item.internal)?.address;
+  if (!proxyHost) return t.skip('No non-loopback IPv4 interface is available.');
   const { engine, directory } = await fixture(t, { host: proxyHost, httpsAgent: new https.Agent({ ca }) });
   engine.httpsAgent.options.lookup = (_host, _opts, callback) => callback(null, [{ address: '127.0.0.1', family: 4 }]);
   const port = await listen(t, https.createServer(await serverCertificate(root), (_req, res) => res.end('wildcard binding works')));
@@ -123,22 +147,38 @@ test('HTTPS inspection reaches its internal listener when the proxy uses a non-d
   assert.match(response, /wildcard binding works/);
 });
 
-test('HTTP/2-only TLS is passed through unchanged and identified as a tunnel', async t => {
+test('private ALPN protocols are passed through unchanged and identified as a tunnel', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-h2-origin-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await ensureCertificate(root);
   const ca = await fs.readFile(path.join(root, 'certs', 'ca.pem'));
   const { engine } = await fixture(t);
-  const server = tls.createServer({ ...(await serverCertificate(root)), ALPNProtocols: ['h2'] }, socket => socket.end('private protocol payload'));
+  const server = tls.createServer({ ...(await serverCertificate(root)), ALPNProtocols: ['private-media'] }, socket => socket.end('private protocol payload'));
   const port = await listen(t, server);
-  const result = await secureAlpnTunnel(engine.state.port, port, ca);
+  const result = await secureAlpnTunnel(engine.state.port, port, ca, 'private-media');
   assert.equal(result, 'private protocol payload');
   const record = engine.list()[0];
   assert.equal(record.method, 'TUNNEL'); assert.equal(record.tunneled, true);
-  assert.equal(engine.detail(record.id).requestHeaders['tls-alpn'], 'h2');
+  assert.equal(engine.detail(record.id).requestHeaders['tls-alpn'], 'private-media');
 });
 
-test('a host rejected by the client certificate check is passed through on retry', async t => {
+test('HTTP/2-only TLS is inspected and translated through the capture pipeline', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-h2-inspection-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await ensureCertificate(root);
+  const ca = await fs.readFile(path.join(root, 'certs', 'ca.pem'));
+  const { engine, directory } = await fixture(t, { httpsAgent: new https.Agent({ ca }) });
+  engine.httpsAgent.options.lookup = (_host, _opts, callback) => callback(null, [{ address: '127.0.0.1', family: 4 }]);
+  const port = await listen(t, https.createServer(await serverCertificate(root), (req, res) => {
+    assert.equal(req.url, '/playlist.m3u8'); res.end('#EXTM3U');
+  }));
+  const response = await secureHttp2Request(engine.state.port, port, await fs.readFile(path.join(directory, 'certs', 'ca.pem')));
+  assert.equal(response, '#EXTM3U');
+  const record = engine.list().find(item => item.path === '/playlist.m3u8');
+  assert.ok(record); assert.equal(record.tunneled, undefined); assert.equal(record.secure, true); assert.equal(record.httpVersion, 'HTTP/2');
+});
+
+test('a connection reset does not disable HTTPS inspection for later requests to the host', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-pinned-origin-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await ensureCertificate(root);
@@ -147,10 +187,35 @@ test('a host rejected by the client certificate check is passed through on retry
   const port = await listen(t, https.createServer(await serverCertificate(root), (_req, res) => res.end('origin reached')));
   await assert.rejects(secureRequest(engine.state.port, port, originCa), /certificate|issuer|verify/i);
   await new Promise(resolve => setTimeout(resolve, 20));
-  const response = await secureRequest(engine.state.port, port, originCa);
-  assert.match(response, /200 OK/); assert.match(response, /origin reached/);
-  const tunnel = engine.list().find(record => record.tunneled);
-  assert.ok(tunnel); assert.match(engine.detail(tunnel.id).responseBody.note, /rejected Proxyking/);
+  await assert.rejects(secureRequest(engine.state.port, port, originCa), /certificate|issuer|verify/i);
+  assert.equal(engine.list().some(record => record.tunneled), false);
+});
+
+test('only explicit TLS certificate alerts trigger encrypted fallback', () => {
+  assert.equal(isCertificateRejection({ code: 'ERR_SSL_SSLV3_ALERT_CERTIFICATE_UNKNOWN' }), true);
+  assert.equal(isCertificateRejection({ code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA' }), true);
+  assert.equal(isCertificateRejection({ code: 'ECONNRESET' }), false);
+  assert.equal(isCertificateRejection({ code: 'ERR_SSL_NO_APPLICATION_PROTOCOL' }), false);
+});
+
+test('unsupported TLS is remembered for pass-through without classifying resets as incompatible', () => {
+  assert.equal(isIncompatibleTls({ code: 'ERR_SSL_UNSUPPORTED_PROTOCOL' }), true);
+  assert.equal(isIncompatibleTls({ code: 'ECONNRESET' }), false);
+  assert.equal(isIncompatibleTls({ code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA' }), false);
+});
+
+test('normal socket shutdown races are not reported as proxy failures', () => {
+  assert.equal(isExpectedSocketClosure({ code: 'ECONNRESET' }), true);
+  assert.equal(isExpectedSocketClosure({ code: 'EPIPE' }), true);
+  assert.equal(isExpectedSocketClosure({ code: 'ENOTFOUND' }), false);
+});
+
+test('CONNECT targets are parsed without allowing malformed authorities to throw', () => {
+  assert.deepEqual(parseConnectTarget('iframe.mediadelivery.net:443'), { hostname: 'iframe.mediadelivery.net', port: 443 });
+  assert.deepEqual(parseConnectTarget('[::1]:8443'), { hostname: '::1', port: 8443 });
+  for (const target of ['', 'https://example.com', 'example.com:bad', 'example.com:443/path', 'user@example.com:443', ' example.com:443']) {
+    assert.equal(parseConnectTarget(target), null);
+  }
 });
 
 test('ClientHello ALPN parser distinguishes inspectable and pass-through protocols', async t => {
@@ -165,7 +230,7 @@ test('ClientHello ALPN parser distinguishes inspectable and pass-through protoco
     return data;
   }
   const h2 = await hello(['h2']);
-  assert.deepEqual(readAlpnProtocols(h2), ['h2']); assert.equal(requiresPassthrough(h2), true);
+  assert.deepEqual(readAlpnProtocols(h2), ['h2']); assert.equal(requiresPassthrough(h2), false);
   const browser = await hello(['h2', 'http/1.1']);
   assert.deepEqual(readAlpnProtocols(browser), ['h2', 'http/1.1']); assert.equal(requiresPassthrough(browser), false);
 });
@@ -228,6 +293,46 @@ test('domain grouping collapses subdomains using public suffix rules', () => {
   assert.equal(mainDomain('api.service.example.co.uk'), 'example.co.uk');
   assert.equal(mainDomain('127.0.0.1'), '127.0.0.1');
   assert.equal(mainDomain('localhost'), 'localhost');
+});
+
+test('records remain until explicitly cleared', () => {
+  const engine = new CaptureEngine();
+  for (let index = 0; index < 250; index++) {
+    engine.addPassthrough({ host: `media-${index}.example.com`, port: 443, protocols: ['private-media'], reason: 'unsupported-alpn' });
+  }
+  assert.equal(engine.list().length, 250);
+  engine.clear();
+  assert.equal(engine.list().length, 0);
+});
+
+test('HAR export can be limited to one selected record', () => {
+  const engine = new CaptureEngine();
+  engine.addPassthrough({ host: 'one.example.com', port: 443, protocols: ['private-media'], reason: 'unsupported-alpn' });
+  engine.addPassthrough({ host: 'two.example.com', port: 443, protocols: ['private-media'], reason: 'unsupported-alpn' });
+  const selected = engine.detail(engine.list()[0].id);
+  const har = engine.exportHar([selected]);
+  assert.equal(har.log.entries.length, 1);
+  assert.equal(har.log.entries[0].request.url, selected.url);
+});
+
+test('encrypted pass-through records do not show a global notice', () => {
+  const engine = new CaptureEngine();
+  const notices = [];
+  engine.on('notice', message => notices.push(message));
+  engine.addPassthrough({ host: 'pinned.example.com', port: 443, protocols: ['h2'], reason: 'certificate-rejected' });
+  engine.addPassthrough({ host: 'private.example.com', port: 443, protocols: ['private-media'], reason: 'unsupported-alpn' });
+  assert.equal(engine.list().length, 2);
+  assert.deepEqual(notices, []);
+});
+
+test('paused capture ignores new records until resumed', () => {
+  const engine = new CaptureEngine();
+  engine.state = { ...engine.state, running: true };
+  const connection = { host: 'media.example.com', port: 443, protocols: ['private-media'], reason: 'unsupported-alpn' };
+  engine.pause(); engine.addPassthrough(connection);
+  assert.equal(engine.list().length, 0);
+  engine.resume(); engine.addPassthrough(connection);
+  assert.equal(engine.list().length, 1);
 });
 
 test('occupied port fails cleanly and stop allows restart', async t => {

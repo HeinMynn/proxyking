@@ -8,7 +8,14 @@ const { ensureCertificate } = require('./certificate');
 const { version } = require('../package.json');
 
 const BODY_LIMIT = 128 * 1024;
-const RECORD_LIMIT = 200;
+const QUIET_TLS_ERRORS = new Set([
+  'ERR_SSL_NO_APPLICATION_PROTOCOL',
+  'ERR_SSL_UNSUPPORTED_PROTOCOL',
+  'ERR_SSL_SSLV3_ALERT_CERTIFICATE_UNKNOWN',
+  'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
+  'ECONNRESET',
+  'EPIPE'
+]);
 
 function mainDomain(hostname = '') {
   const normalized = String(hostname).toLowerCase().replace(/\.$/, '');
@@ -82,7 +89,7 @@ class CaptureEngine extends EventEmitter {
     this.httpsAgent = httpsAgent;
     this.records = new Map();
     this.sockets = new Set();
-    this.state = { running: false, port: 8080, host };
+    this.state = { running: false, paused: false, port: 8080, host };
     this.busy = false;
     this.notices = new Set();
   }
@@ -93,6 +100,10 @@ class CaptureEngine extends EventEmitter {
   list() { return [...this.records.values()].map(record => this.summary(record)); }
   detail(id) { return this.records.get(id) || null; }
   clear() { this.records.clear(); this.emit('cleared'); }
+  async prepareCertificate() {
+    this.certificatePath = await ensureCertificate(this.directory);
+    return this.certificatePath;
+  }
   publish(record) {
     if (this.records.has(record.id)) this.emit('record', this.summary(record));
   }
@@ -103,7 +114,7 @@ class CaptureEngine extends EventEmitter {
     if (require('node:net').isIP(host) !== 4) throw new Error('A valid IPv4 listening address is required.');
     this.busy = true;
     try {
-      this.certificatePath = await ensureCertificate(this.directory);
+      await this.prepareCertificate();
       const proxy = new InspectionProxy({ onPassthrough: connection => this.addPassthrough(connection) });
       this.proxy = proxy;
       let startupReject;
@@ -115,13 +126,12 @@ class CaptureEngine extends EventEmitter {
           ctx._record.duration = Date.now() - ctx._record.startedAt;
           this.publish(ctx._record);
         }
-        const certificateRejected = ['ERR_SSL_SSLV3_ALERT_CERTIFICATE_UNKNOWN', 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA'].includes(error.code);
-        const message = certificateRejected
-          ? 'An app rejected the Proxyking certificate. Install and trust Proxyking Local CA; certificate-pinned apps may still reject inspection.'
-          : `${kind}: ${error.message}`;
+        if (QUIET_TLS_ERRORS.has(error.code)) return;
+        const message = `${kind}: ${error.message}`;
         if (!this.notices.has(message)) { this.notices.add(message); this.emit('notice', message); }
       });
       proxy.onRequest((ctx, callback) => {
+        if (this.state.paused) return callback();
         const req = ctx.clientToProxyRequest;
         const clientAddress = normalizeClientAddress(ctx.connectRequest?.socket?.remoteAddress || req.socket?.remoteAddress);
         let url;
@@ -134,6 +144,7 @@ class CaptureEngine extends EventEmitter {
         const record = {
           id: randomUUID(), startedAt: Date.now(), method: req.method, url: url.href,
           host: url.host, domain: mainDomain(url.hostname), path: url.pathname + url.search, secure: ctx.isSSL,
+          httpVersion: req.httpVersionMajor === 2 ? 'HTTP/2' : `HTTP/${req.httpVersion || '1.1'}`,
           application: inferApplication(req.headers), remoteDevice: remoteDeviceAddress(clientAddress, this.state.host),
           status: null, state: 'pending', duration: null, size: 0,
           requestSize: 0,
@@ -145,7 +156,6 @@ class CaptureEngine extends EventEmitter {
         delete ctx.proxyToServerRequestOptions.headers['proxy-authorization'];
         delete ctx.proxyToServerRequestOptions.headers['proxy-connection'];
         this.records.set(record.id, record);
-        while (this.records.size > RECORD_LIMIT) this.records.delete(this.records.keys().next().value);
         this.publish(record);
         const request = bodyCollector();
         const response = bodyCollector();
@@ -182,7 +192,7 @@ class CaptureEngine extends EventEmitter {
           resolve();
         });
       });
-      this.state = { running: true, host, port: proxy.httpPort };
+      this.state = { running: true, paused: false, host, port: proxy.httpPort };
       this.emit('state', this.state);
       return this.state;
     } catch (error) {
@@ -192,6 +202,7 @@ class CaptureEngine extends EventEmitter {
     } finally { this.busy = false; }
   }
   addPassthrough({ host, port, protocols, reason, clientAddress }) {
+    if (this.state.paused) return;
     const certificateRejected = reason === 'certificate-rejected';
     const startedAt = Date.now();
     const record = {
@@ -204,10 +215,7 @@ class CaptureEngine extends EventEmitter {
       requestBody: { text: '', size: 0 }, responseBody: { text: '', size: 0, note: certificateRejected ? 'The client rejected Proxyking’s generated certificate, so later connections to this host are passed through encrypted for the rest of this capture session.' : 'This TLS protocol is not supported by the HTTP inspector, so Proxyking passed the encrypted connection through unchanged.' }
     };
     this.records.set(record.id, record);
-    while (this.records.size > RECORD_LIMIT) this.records.delete(this.records.keys().next().value);
     this.publish(record);
-    const message = certificateRejected ? 'A client rejected HTTPS inspection. Later connections to that host are passed through encrypted and marked as TUNNEL.' : 'Some TLS connections use protocols the HTTP inspector cannot decode. Proxyking passes them through unchanged and marks them as TUNNEL.';
-    if (!this.notices.has(message)) { this.notices.add(message); this.emit('notice', message); }
   }
   async stop() {
     if (this.busy) throw new Error('The proxy is changing state. Please try again.');
@@ -217,7 +225,7 @@ class CaptureEngine extends EventEmitter {
     this.proxy.httpAgent?.destroy();
     this.proxy.httpsAgent?.destroy();
     this.proxy.close(); this.proxy = null;
-    this.state = { ...this.state, running: false };
+    this.state = { ...this.state, running: false, paused: false };
     for (const record of this.records.values()) {
       if (record.state === 'pending') {
         record.state = 'failed'; record.error = 'Capture stopped';
@@ -226,14 +234,28 @@ class CaptureEngine extends EventEmitter {
     }
     this.emit('state', this.state); return this.state;
   }
-  exportHar() {
+  pause() {
+    if (this.state.running && !this.state.paused) {
+      this.state = { ...this.state, paused: true };
+      this.emit('state', this.state);
+    }
+    return this.state;
+  }
+  resume() {
+    if (this.state.running && this.state.paused) {
+      this.state = { ...this.state, paused: false };
+      this.emit('state', this.state);
+    }
+    return this.state;
+  }
+  exportHar(records = this.records.values()) {
     const headers = object => Object.entries(object).map(([name, value]) => ({ name, value: Array.isArray(value) ? value.join('\n') : String(value) }));
-    return { log: { version: '1.2', creator: { name: 'Proxyking', version }, entries: [...this.records.values()].map(r => ({
+    return { log: { version: '1.2', creator: { name: 'Proxyking', version }, entries: [...records].map(r => ({
       startedDateTime: new Date(r.startedAt).toISOString(), time: r.duration || 0,
-      request: { method: r.method, url: r.url, httpVersion: 'HTTP/1.1', cookies: [], headers: headers(r.requestHeaders), queryString: [...new URL(r.url).searchParams].map(([name, value]) => ({ name, value })), headersSize: -1, bodySize: r.requestBody.size, postData: { mimeType: String(r.requestHeaders['content-type'] || ''), text: r.requestBody.text }, _bodyEncoding: r.requestBody.encoding, _truncated: !!r.requestBody.truncated },
+      request: { method: r.method, url: r.url, httpVersion: r.httpVersion || 'HTTP/1.1', cookies: [], headers: headers(r.requestHeaders), queryString: [...new URL(r.url).searchParams].map(([name, value]) => ({ name, value })), headersSize: -1, bodySize: r.requestBody.size, postData: { mimeType: String(r.requestHeaders['content-type'] || ''), text: r.requestBody.text }, _bodyEncoding: r.requestBody.encoding, _truncated: !!r.requestBody.truncated },
       response: { status: r.status || 0, statusText: '', httpVersion: 'HTTP/1.1', cookies: [], headers: headers(r.responseHeaders), content: { size: r.size, mimeType: String(r.responseHeaders['content-type'] || ''), text: r.responseBody.text, ...(r.responseBody.encoding === 'base64' ? { encoding: 'base64' } : {}), _truncated: !!r.responseBody.truncated, _note: r.responseBody.note }, redirectURL: String(r.responseHeaders.location || ''), headersSize: -1, bodySize: r.size },
       cache: {}, timings: { send: 0, wait: r.duration || 0, receive: 0 }, _error: r.error
     })) } };
   }
 }
-module.exports = { CaptureEngine, bodyCollector, inferApplication, mainDomain, normalizeClientAddress, remoteDeviceAddress, BODY_LIMIT, RECORD_LIMIT };
+module.exports = { CaptureEngine, bodyCollector, inferApplication, mainDomain, normalizeClientAddress, remoteDeviceAddress, BODY_LIMIT };

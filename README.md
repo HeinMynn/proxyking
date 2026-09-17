@@ -1,6 +1,6 @@
 # Proxyking
 
-A Windows and macOS desktop HTTP/HTTPS capture app built with Electron. The current milestone includes a real local interception proxy, live traffic list, domain and text filters, request/response headers and body previews, certificate export, and HAR session export.
+A Windows and macOS desktop HTTP/HTTPS capture app built with Electron. The current milestone includes a real local interception proxy, live traffic list, domain and text filters, request/response headers and body previews, certificate export, and full-session or individual-request HAR export.
 
 ## Run
 
@@ -25,7 +25,7 @@ npm start
 - If restoration fails, Proxyking keeps the listener and window open and retains the recovery record. Retry stopping capture after resolving the permission or policy issue.
 - A proxy endpoint selected by another app during capture is preserved instead of blindly overwritten. Corporate upstream proxy chaining is not implemented; use manual mode when your app requires an existing upstream proxy.
 - Turn off **Configure system proxy automatically** in Connection setup to use manual mode. Then set your app's HTTP/HTTPS proxy to the exact address shown in the header, such as `192.168.1.42:8080`, and remove that configuration when finished. Apps with independent proxy settings, such as Firefox configurations, may need to select **Use system proxy settings**.
-- The header Start/Pause button controls capture without discarding the list. Clear removes captured entries. New restores the current proxy settings, clears the list, detects the active LAN address again, and starts a fresh session.
+- The header Start/Pause button controls recording without discarding the list. Pause keeps the listener and system proxy active so traffic continues to flow without being recorded. Stop restores the previous proxy settings and shuts down the listener. Clear removes captured entries. New restores the current proxy settings, clears the list, detects the active LAN address again, and starts a fresh session.
 - The sidebar groups traffic by app, remote device, and registrable domain. Remote devices are identified by client IP when they connect through Proxyking; traffic from the computer running Proxyking remains under **All connections**. Subdomains such as `docs.google.com` and `drive.google.com` are grouped under `google.com`. App names are inferred from HTTP client headers (for example Edge, Chrome, Firefox, Postman, curl, and common SDKs); clients without an identifying header appear under **Unknown app**.
 - Proxyking binds only to the selected private interface address, rather than every adapter. Other devices on that LAN may still be able to reach it while capture runs if the operating-system firewall permits the connection.
 
@@ -47,7 +47,7 @@ Each installation generates its own **Proxyking Local CA**, valid for one year. 
 
 **Windows:** Open the exported `.crt`, select Install Certificate → Current User → Place all certificates in the following store → Trusted Root Certification Authorities. Remove it later using `certmgr.msc` in the same store. Automatic mode handles your proxy settings; manual settings are in Settings → Network & internet → Proxy → Manual proxy setup.
 
-**macOS:** Import the `.crt` into your login keychain with Keychain Access. Open **Proxyking Local CA**, expand Trust, and set Secure Sockets Layer (SSL) to Always Trust. Delete it from the keychain to revoke trust. Automatic mode handles Web Proxy (HTTP) and Secure Web Proxy (HTTPS); manual settings are in System Settings → Network → your connection → Details → Proxies.
+**macOS:** Click **Install & Trust CA** to add the public CA to your login keychain with SSL trust. Use **Revoke & Remove CA** to remove the exact matching CA and its user trust settings. Alternatively, export the `.crt`, import it with Keychain Access, open **Proxyking Local CA**, expand Trust, and set Secure Sockets Layer (SSL) to Always Trust. System-wide one-click installation or removal requires a separately signed privileged helper and is not part of the current development build. Automatic mode handles Web Proxy (HTTP) and Secure Web Proxy (HTTPS); manual settings are in System Settings → Network → your connection → Details → Proxies.
 
 Some browsers and runtimes use separate trust stores. Certificate-pinned apps need an appropriate debug configuration; installing a root certificate does not universally bypass pinning. Upstream TLS certificates remain validated.
 
@@ -56,9 +56,9 @@ After such a rejection, Proxyking learns that host for the current capture sessi
 
 ## Scope and limits
 
-- HTTP/1.1 capture and HTTPS interception through an explicit proxy. Apps that ignore the proxy and HTTP/3/QUIC traffic are not captured.
-- TLS clients that offer only HTTP/2 or a private ALPN protocol are passed through encrypted so the application keeps working. They appear as `TUNNEL` entries and their contents cannot be inspected. Browser connections that offer HTTP/1.1 are intercepted normally.
-- Latest 200 requests retained in memory; up to 128 KiB per request/response body preview. The full payload is forwarded. Compressed previews are decoded within the same bound; binary bodies use base64.
+- HTTP/1.1 and HTTP/2 capture with HTTPS interception through an explicit proxy. Intercepted HTTP/2 requests are translated through the current HTTP/1.1 upstream pipeline. Apps that ignore the proxy and HTTP/3/QUIC traffic are not captured.
+- TLS clients that offer only a private or unsupported ALPN protocol are passed through encrypted so the application keeps working. They appear as `TUNNEL` entries and their contents cannot be inspected.
+- Requests remain in memory until Clear, New, or application exit. Up to 128 KiB is retained per request/response body preview; the full payload is forwarded. Compressed previews are decoded within the same bound; binary bodies use base64.
 - Sessions are not persisted unless exported. HAR files contain captured headers, cookies, and payloads, including any credentials in them. Truncation is marked with custom HAR fields. Timing is total elapsed time, not a DNS/TLS phase breakdown.
 - WebSocket frame inspection, replay, breakpoints, mobile apps, and pinning bypass are not implemented.
 - Trust/certificate setup is manual. Do not share the private CA key. Certificates are not automatically renewed; remove the trusted CA and regenerate local certificate data when it expires.

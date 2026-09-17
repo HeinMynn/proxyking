@@ -42,6 +42,20 @@ class CaptureSession extends EventEmitter {
       }
     });
   }
+  pause() {
+    return this.enqueue(async () => {
+      if (!this.engine.state.running) return;
+      this.engine.pause();
+      this.tell('Capture paused. Traffic is still routed through Proxyking and system proxy settings remain active.');
+    });
+  }
+  resume() {
+    return this.enqueue(async () => {
+      if (!this.engine.state.running) throw new Error('Start Proxyking before resuming capture.');
+      this.engine.resume();
+      this.tell('Capture resumed.');
+    });
+  }
   stop() {
     return this.enqueue(async () => {
       // Never shut down the listener while OS settings may still point at it.

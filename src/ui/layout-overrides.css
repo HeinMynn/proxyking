@@ -46,6 +46,18 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
 .capture-icon.pause::before { left: 3px; }
 .capture-icon.pause::after { right: 3px; }
 
+.stop-button:not(:disabled) { color: var(--red); border-color: #673c45; }
+.stop-icon { display:inline-block; width:11px; height:11px; border-radius:2px; background:currentColor; }
+.certificate-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.danger-button { color:var(--red); border-color:#673c45; }
+.certificate-status-dot { width:8px; height:8px; margin-left:auto; flex:0 0 8px; border-radius:50%; background:#526176; box-shadow:0 0 0 2px #52617622; }
+.certificate-status-dot.trusted { background:var(--green); box-shadow:0 0 7px #72d99488; }
+.certificate-status-dot.untrusted { background:var(--yellow); box-shadow:0 0 7px #e7c45f66; }
+.certificate-status-dot.missing,.certificate-status-dot.unsupported { background:#526176; box-shadow:none; }
+.certificate-status-detail { margin:10px 0; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:#0c131e; }
+.certificate-status-detail.trusted { color:var(--green); border-color:#346448; }
+.certificate-status-detail.untrusted,.certificate-status-detail.missing { color:var(--yellow); border-color:#6d582d; }
+
 .app-header { grid-row: 1; }
 .notice { grid-row: 2; }
 .workspace { grid-row: 3; }
@@ -418,4 +430,13 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
   .sidebar { width: 182px; flex-basis: 182px; }
   .network-footer { grid-template-columns: 182px repeat(4, max-content) minmax(20px, 1fr); }
   .network-footer > span { padding: 0 9px; }
+}
+.app-identity .logo {
+  display: block;
+  width: 29px;
+  height: 29px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: none;
+  transform: none;
 }

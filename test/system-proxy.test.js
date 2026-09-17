@@ -22,9 +22,11 @@ async function setup(t, adapter = new FakeWindows()) {
 }
 function fakeEngine(log = []) {
   return {
-    state: { running: false, port: 8080, host: '127.0.0.1' },
-    async start(port, host = '127.0.0.1') { log.push('listen'); this.state = { ...this.state, running: true, port, host }; },
-    async stop() { log.push('close'); this.state.running = false; }
+    state: { running: false, paused: false, port: 8080, host: '127.0.0.1' },
+    async start(port, host = '127.0.0.1') { log.push('listen'); this.state = { ...this.state, running: true, paused: false, port, host }; },
+    pause() { log.push('pause'); this.state.paused = true; },
+    resume() { log.push('resume'); this.state.paused = false; },
+    async stop() { log.push('close'); this.state.running = false; this.state.paused = false; }
   };
 }
 
@@ -109,6 +111,23 @@ test('session starts listener first and restores settings before stopping it', a
   await capture.start(8080); await capture.stop();
   assert.deepEqual(log, ['listen', 'enable', 'restore', 'close']);
   assert.equal(capture.state.busy, false);
+});
+
+test('pause and resume keep the listener and system proxy active', async t => {
+  const { manager, adapter } = await setup(t);
+  const log = [];
+  const capture = new CaptureSession(fakeEngine(log), manager);
+  await capture.start(8080);
+  const enabled = structuredClone(adapter.current);
+  await capture.pause();
+  assert.equal(capture.state.running, true); assert.equal(capture.state.paused, true);
+  assert.equal(manager.active, true); assert.deepEqual(adapter.current, enabled);
+  await capture.resume();
+  assert.equal(capture.state.running, true); assert.equal(capture.state.paused, false);
+  assert.equal(manager.active, true); assert.deepEqual(adapter.current, enabled);
+  await capture.stop();
+  assert.deepEqual(log, ['listen', 'pause', 'resume', 'close']);
+  assert.deepEqual(adapter.current, original());
 });
 
 test('partial activation failure rolls back before the listener is stopped', async t => {
