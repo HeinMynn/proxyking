@@ -1,6 +1,10 @@
 const api = window.proxyking;
 const $ = id => document.getElementById(id);
 const records = new Map();
+const knownDevices = new Map();
+const breakpointRules = new Set();
+const pendingBreakpoints = new Map();
+let activeBreakpoint = null;
 const views = { request: 'headers', response: 'headers' };
 let state = { running: false, paused: false, busy: false, host: '127.0.0.1', port: 8080 };
 let selectedId = null;
@@ -121,7 +125,7 @@ function render() {
   $('responseTraffic').textContent = bytes(all.reduce((total, record) => total + record.size, 0));
   const hosts = [...new Set(all.map(record => record.domain || record.host))].sort();
   const apps = [...new Set(all.map(record => record.application || 'Unknown app'))].sort();
-  const devices = [...new Set(all.map(record => record.remoteDevice).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const devices = [...new Set([...knownDevices.keys(), ...all.map(record => record.remoteDevice).filter(Boolean)])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   $('hostCount').textContent = hosts.length;
   $('footerHosts').textContent = hosts.length;
   $('appCount').textContent = apps.length;
@@ -138,10 +142,16 @@ function render() {
   }));
   if (!apps.length) $('apps').append(element('p', 'subtle', 'Apps appear as traffic arrives.'));
   $('devices').replaceChildren(...devices.map(device => {
+    const info = knownDevices.get(device);
     const button = element('button', `host-button device-button${device === selectedDevice ? ' selected' : ''}`);
     const count = all.filter(record => record.remoteDevice === device).length;
-    button.append(element('span', 'device-icon', '◇'), element('span', 'device-name', device), element('span', 'device-traffic-count', String(count)));
-    button.title = `Traffic from ${device}`;
+    const identity = element('span', 'device-identity');
+    if (info?.platform && info.platform !== 'Unknown device') identity.append(element('span', 'device-platform', info.platform));
+    identity.append(element('span', 'device-name', device));
+    const trust = element('span', `device-trust${info?.trustedAt ? ' trusted' : ''}`);
+    trust.title = info?.trustedAt ? 'HTTPS verified' : 'HTTPS not verified';
+    button.append(element('span', 'device-icon', info?.platform === 'Android' ? 'A' : info?.platform === 'iOS' ? 'i' : '◇'), identity, trust, element('span', 'device-traffic-count', String(count)));
+    button.title = `${info?.platform || 'Remote device'} · ${device} · ${info?.trustedAt ? 'HTTPS verified' : 'HTTPS not verified'}`;
     button.addEventListener('click', () => { selectedDevice = device === selectedDevice ? null : device; selectedApp = null; selectedDomain = null; render(); });
     return button;
   }));
@@ -164,6 +174,9 @@ function resetSelection() {
   $('selectedUrl').title = '';
   $('copyUrl').disabled = true;
   $('exportSelected').disabled = true;
+  $('replaySelected').disabled = true;
+  $('requestBreakpoint').disabled = true;
+  $('responseBreakpoint').disabled = true;
   $('requestSummary').textContent = 'No request selected';
   $('responseSummary').textContent = 'No response selected';
   $('requestContent').replaceChildren(element('div', 'placeholder', 'Select a connection above.'));
@@ -180,6 +193,13 @@ async function loadDetail() {
   $('selectedUrl').title = detail.url;
   $('copyUrl').disabled = false;
   $('exportSelected').disabled = false;
+  const replayable = detail.state === 'complete' && !detail.tunneled && !detail.requestBody?.truncated && detail.requestBody?.encoding !== 'base64' && ['', 'identity'].includes(String(detail.requestHeaders?.['content-encoding'] || '').toLowerCase());
+  $('replaySelected').disabled = !replayable;
+  for (const side of ['request', 'response']) {
+    const button = $(side + 'Breakpoint');
+    button.disabled = !!detail.tunneled;
+    button.classList.toggle('tool-active', breakpointRules.has(side + ':' + detail.host.toLowerCase()));
+  }
   $('requestSummary').textContent = `${bytes(detail.requestBody?.size)} · ${Object.keys(detail.requestHeaders || {}).length} headers`;
   $('responseSummary').textContent = `${detail.status || detail.state} · ${bytes(detail.size)} · ${detail.duration ?? '…'} ms`;
   renderMessages();
@@ -233,6 +253,39 @@ function renderSide(side) {
 function renderMessages() { renderSide('request'); renderSide('response'); }
 
 function openSetup() { $('setup').showModal(); refreshCertificateStatus(); }
+async function openDeviceSetup() {
+  if (!$('deviceSetupDialog').open) $('deviceSetupDialog').showModal();
+  const details = await action(() => api.deviceSetup());
+  if (!details) return;
+  $('deviceSetupUrl').textContent = details.url;
+  $('deviceSetupUnavailable').hidden = details.available;
+  $('deviceSetupAvailable').hidden = !details.available;
+  if (details.available) $('deviceSetupQr').src = details.qrDataUrl;
+}
+function showNextBreakpoint() {
+  if (activeBreakpoint || !pendingBreakpoints.size) return;
+  const next = pendingBreakpoints.values().next().value;
+  activeBreakpoint = next.id;
+  $('breakpointTitle').textContent = next.side === 'request' ? 'Request breakpoint' : 'Response breakpoint';
+  $('breakpointTarget').textContent = next.method + ' ' + next.url;
+  $('breakpointBody').value = next.body;
+  $('breakpointDialog').showModal();
+}
+async function resolveActiveBreakpoint(actionName) {
+  const id = activeBreakpoint;
+  if (!id) return;
+  const body = $('breakpointBody').value;
+  const result = await action(() => api.resolveBreakpoint(id, actionName === 'edit' ? { action: 'edit', body } : { action: 'continue' }));
+  if (result === null) return;
+}
+function openReplay() {
+  if (!currentRecord || $('replaySelected').disabled) return;
+  $('replayMethod').value = currentRecord.method;
+  $('replayUrl').value = currentRecord.url;
+  $('replayHeaders').value = JSON.stringify(currentRecord.requestHeaders || {}, null, 2);
+  $('replayBody').value = currentRecord.requestBody?.text || '';
+  $('replayDialog').showModal();
+}
 function setupSectionToggle(buttonId, contentId, collapsedClass) {
   const button = $(buttonId);
   const content = $(contentId);
@@ -247,7 +300,10 @@ setupSectionToggle('appsToggle', 'apps', 'apps-collapsed');
 setupSectionToggle('devicesToggle', 'devices', 'devices-collapsed');
 setupSectionToggle('domainsToggle', 'hosts', 'domains-collapsed');
 for (const id of ['setupButton', 'certificateButton', 'emptySetup']) $(id).addEventListener('click', openSetup);
+$('deviceSetupButton').addEventListener('click', openDeviceSetup);
 $('closeSetup').addEventListener('click', () => $('setup').close());
+$('closeDeviceSetup').addEventListener('click', () => $('deviceSetupDialog').close());
+$('copyDeviceSetupUrl').addEventListener('click', () => action(async () => { await api.copyText($('deviceSetupUrl').textContent); notify('Mobile setup URL copied.'); }));
 $('captureButton').addEventListener('click', async () => {
   notify('');
   const next = await action(() => !state.running ? api.start(Number($('port').value), $('automaticProxy').checked) : state.paused ? api.resume() : api.pause());
@@ -290,6 +346,40 @@ $('removeCertificate').addEventListener('click', () => action(async () => {
   } finally { await refreshCertificateStatus(); }
 }));
 $('copyUrl').addEventListener('click', () => action(async () => { await api.copyText(currentRecord.url); notify('Request URL copied.'); }));
+$('replaySelected').addEventListener('click', openReplay);
+$('closeReplay').addEventListener('click', () => $('replayDialog').close());
+$('sendReplay').addEventListener('click', async () => {
+  let headers;
+  try { headers = JSON.parse($('replayHeaders').value); } catch { notify('Headers must be valid JSON.'); return; }
+  $('sendReplay').disabled = true;
+  try {
+    const result = await action(() => api.replay(currentRecord.id, {
+      method: $('replayMethod').value, url: $('replayUrl').value, headers, body: $('replayBody').value
+    }));
+    if (result) {
+      $('replayDialog').close();
+      selectedDomain = selectedApp = selectedDevice = null;
+      selectedId = result.id;
+      render(); loadDetail();
+      notify('Replay completed.');
+    }
+  } finally { $('sendReplay').disabled = false; }
+});
+for (const side of ['request', 'response']) $(side + 'Breakpoint').addEventListener('click', async () => {
+  if (!currentRecord || currentRecord.tunneled) return;
+  const host = currentRecord.host;
+  const key = side + ':' + host.toLowerCase();
+  const rules = await action(() => api.setBreakpoint(host, side, !breakpointRules.has(key)));
+  if (rules) {
+    breakpointRules.clear(); rules.forEach(rule => breakpointRules.add(rule));
+    loadDetail();
+    notify((breakpointRules.has(key) ? 'Enabled' : 'Disabled') + ' ' + side + ' breakpoint for ' + host + '.');
+  }
+});
+$('continueBreakpoint').addEventListener('click', () => resolveActiveBreakpoint('continue'));
+$('sendBreakpoint').addEventListener('click', () => resolveActiveBreakpoint('edit'));
+$('breakpointDialog').addEventListener('cancel', event => { event.preventDefault(); resolveActiveBreakpoint('continue'); });
+
 $('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; selectedDevice = null; render(); });
 $('search').addEventListener('input', scheduleRender);
 $('typeFilter').addEventListener('change', render);
@@ -300,21 +390,32 @@ document.querySelectorAll('.data-tabs').forEach(nav => nav.querySelectorAll('but
   nav.querySelectorAll('button').forEach(item => item.classList.toggle('selected', item === button));
   renderSide(side);
 })));
-document.addEventListener('keydown', event => { if (event.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !$('setup').open) { event.preventDefault(); $('search').focus(); } });
+document.addEventListener('keydown', event => { if (event.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !document.querySelector('dialog[open]')) { event.preventDefault(); $('search').focus(); } });
 
 api.on('record', record => {
   records.set(record.id, record);
   scheduleRender();
   if (selectedId === record.id) loadDetail();
 });
-api.on('state', updateState);
+api.on('device', device => { knownDevices.set(device.address, device); render(); });
+api.on('state', next => { updateState(next); if ($('deviceSetupDialog').open) openDeviceSetup(); });
 api.on('notice', notify);
-api.on('cleared', () => { records.clear(); selectedDomain = null; selectedApp = null; selectedDevice = null; resetSelection(); render(); });
+api.on('breakpoint', item => { pendingBreakpoints.set(item.id, item); showNextBreakpoint(); });
+api.on('breakpoint-rules', rules => { breakpointRules.clear(); rules.forEach(rule => breakpointRules.add(rule)); if (currentRecord) loadDetail(); });
+api.on('breakpoint-resolved', id => {
+  pendingBreakpoints.delete(id);
+  if (activeBreakpoint === id) { activeBreakpoint = null; $('breakpointDialog').close(); }
+  showNextBreakpoint();
+});
+
+api.on('cleared', () => { records.clear(); selectedDomain = null; selectedApp = null; resetSelection(); render(); });
 
 action(async () => {
   const snapshot = await api.snapshot();
   $('footerVersion').textContent = `v${snapshot.version}`;
   snapshot.records.forEach(record => records.set(record.id, record));
+  (snapshot.devices || []).forEach(device => knownDevices.set(device.address, device));
+  (snapshot.breakpoints || []).forEach(rule => breakpointRules.add(rule));
   updateState(snapshot.state);
   if (snapshot.notice) notify(snapshot.notice);
   if (snapshot.state.running) $('automaticProxy').checked = snapshot.state.mode === 'automatic';

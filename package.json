@@ -1,6 +1,6 @@
 {
   "name": "proxyking",
-  "version": "0.3.13",
+  "version": "0.4.0",
   "description": "Desktop HTTP and HTTPS traffic inspector",
   "main": "src/main.js",
   "author": "Proxyking",
@@ -46,6 +46,7 @@
   "dependencies": {
     "http-mitm-proxy": "^1.1.0",
     "node-forge": "^1.4.0",
+    "qrcode": "^1.5.4",
     "tldts": "^7.4.13"
   },
   "devDependencies": {

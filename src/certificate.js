@@ -4,6 +4,31 @@ const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const forge = require('node-forge');
 
+const LEAF_CACHE_VERSION = 'ios-compatible-v1';
+
+async function refreshLeafCertificateCache(directory) {
+  const markerPath = path.join(directory, '.leaf-cache-version');
+  try {
+    if ((await fs.readFile(markerPath, 'utf8')).trim() === LEAF_CACHE_VERSION) return false;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const locations = [
+    { directory: path.join(directory, 'certs'), keep: new Set(['ca.pem']), extension: '.pem' },
+    { directory: path.join(directory, 'keys'), keep: new Set(['ca.private.key', 'ca.public.key']), extension: '.key' }
+  ];
+  for (const location of locations) {
+    const entries = await fs.readdir(location.directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(location.extension) && !location.keep.has(entry.name)) {
+        await fs.unlink(path.join(location.directory, entry.name));
+      }
+    }
+  }
+  await fs.writeFile(markerPath, LEAF_CACHE_VERSION, { mode: 0o600 });
+  return true;
+}
+
 async function ensureCertificate(directory) {
   await fs.mkdir(path.join(directory, 'keys'), { recursive: true, mode: 0o700 });
   await fs.mkdir(path.join(directory, 'certs'), { recursive: true, mode: 0o700 });
@@ -37,4 +62,4 @@ async function ensureCertificate(directory) {
   return certPath;
 }
 
-module.exports = { ensureCertificate };
+module.exports = { ensureCertificate, refreshLeafCertificateCache, LEAF_CACHE_VERSION };

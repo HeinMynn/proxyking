@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, session, clipboard } = requi
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
+const QRCode = require('qrcode');
 const { CaptureEngine } = require('./engine');
 const { createAdapter } = require('./system-proxy/adapters');
 const { SystemProxyManager } = require('./system-proxy/manager');
@@ -59,13 +60,13 @@ if (primary) app.whenReady().then(async () => {
   engine = new CaptureEngine({ directory: path.join(app.getPath('userData'), 'certificates'), host: localAddress });
   const systemProxy = new SystemProxyManager({ directory: app.getPath('userData'), adapter: createAdapter() });
   capture = new CaptureSession(engine, systemProxy);
-  for (const name of ['record', 'notice', 'cleared']) {
+  for (const name of ['record', 'device', 'notice', 'cleared', 'breakpoint', 'breakpoint-rules', 'breakpoint-resolved']) {
     engine.on(name, data => { if (window && !window.isDestroyed()) window.webContents.send(`capture:${name}`, data); });
   }
   for (const name of ['state', 'notice']) capture.on(name, data => {
     if (window && !window.isDestroyed()) window.webContents.send(`capture:${name}`, data);
   });
-  handle('capture:snapshot', () => ({ state: capture.state, records: engine.list(), platform: process.platform, version: app.getVersion(), notice: capture.notice }));
+  handle('capture:snapshot', () => ({ state: capture.state, records: engine.list(), devices: engine.deviceList(), breakpoints: engine.breakpointList(), platform: process.platform, version: app.getVersion(), notice: capture.notice }));
   handle('capture:start', async (port, automatic = true) => {
     if (quitInProgress) throw new Error('Proxyking is closing.');
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Choose a port from 1 to 65535.');
@@ -79,6 +80,18 @@ if (primary) app.whenReady().then(async () => {
   handle('capture:recover', () => capture.stop());
   handle('capture:clear', () => engine.clear());
   handle('capture:detail', id => typeof id === 'string' ? engine.detail(id) : null);
+  handle('capture:replay', (id, draft) => engine.replay(id, draft));
+  handle('capture:set-breakpoint', (host, side, enabled) => engine.setBreakpoint(host, side, enabled));
+  handle('capture:resolve-breakpoint', (id, decision) => engine.resolveBreakpoint(id, decision));
+  handle('capture:device-setup', async () => {
+    const url = engine.setupUrl();
+    return {
+      available: capture.state.running,
+      url,
+      endpoint: `${capture.state.host}:${capture.state.port}`,
+      qrDataUrl: capture.state.running ? await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 2, width: 280 }) : null
+    };
+  });
   handle('capture:copy-text', text => {
     if (typeof text !== 'string' || text.length > 1024 * 1024) throw new Error('Invalid clipboard text.');
     clipboard.writeText(text);

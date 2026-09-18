@@ -3,6 +3,7 @@ const https = require('node:https');
 const http2 = require('node:http2');
 const { Proxy } = require('http-mitm-proxy');
 const { readAlpnProtocols, requiresPassthrough } = require('./tls-client-hello');
+const { SETUP_VERIFY_HOST } = require('./device-setup');
 
 const expectedClientErrors = new Set([
   'ERR_SSL_NO_APPLICATION_PROTOCOL',
@@ -68,7 +69,7 @@ class InspectionProxy extends Proxy {
           // speculative or cancelled connections, so ECONNRESET must not disable
           // inspection for every later connection to the host.
           if (isCertificateRejection(error)) {
-            for (const host of hosts) this.rejectedHosts.add(host);
+            for (const host of hosts) if (host !== SETUP_VERIFY_HOST) this.rejectedHosts.add(host);
           }
           if (isIncompatibleTls(error)) {
             for (const host of hosts) this.incompatibleHosts.add(host);

@@ -1,6 +1,6 @@
 # Proxyking
 
-A Windows and macOS desktop HTTP/HTTPS capture app built with Electron. The current milestone includes a real local interception proxy, live traffic list, domain and text filters, request/response headers and body previews, certificate export, and full-session or individual-request HAR export.
+A Windows and macOS desktop HTTP/HTTPS capture app built with Electron. The current milestone includes a real local interception proxy, live traffic inspection, remote-device setup for Android and iOS, certificate trust management, and full-session or individual-request HAR export.
 
 ## Run
 
@@ -41,6 +41,25 @@ For HTTPS without installing the CA system-wide, export it and pass its location
 curl.exe --proxy http://192.168.1.42:8080 --cacert Proxyking-CA.crt https://example.com
 ```
 
+## Replay and breakpoints
+
+Select a completed inspected request and click **Replay** to edit its method, URL, headers, or text body and send it again from the desktop. The replay appears as a new connection. Replaying a state-changing request can repeat a real action; inspect the URL and body before sending. Truncated, binary, or compressed request bodies are not offered for replay.
+
+Select a connection and enable **Request BP** or **Response BP** to pause future traffic for that exact host. When a text body is intercepted, Proxyking opens an editor. **Continue original** sends the unmodified body; **Send edited body** substitutes your text. Breakpoints are limited to 1 MiB and automatically continue unchanged after two minutes or when capture stops. Compressed and non-text bodies pass through without a breakpoint. Rules last until the app exits.
+
+## Android and iOS setup
+
+Start Proxyking, then select **Mobile setup** in the sidebar. Scan the QR code from a phone or tablet on the same Wi-Fi network. The local setup page at `http://<proxy-ip>:<port>/setup` provides:
+
+- the Wi-Fi proxy server and port;
+- platform-specific Android and iOS instructions;
+- a download of the public **Proxyking Local CA**;
+- an automatic local HTTPS verification at `https://proxyking.test/verify` while the setup page is open, with a manual fallback button.
+
+Proxyking also marks a device verified when it successfully inspects that device's first HTTPS request. A successful verification means that the device accepted a certificate issued by Proxyking Local CA. The Remote Devices sidebar then shows a green trust indicator for that client IP. Setup and verification requests are handled locally and are not added to the capture list.
+
+Proxy and CA installation still require confirmation in Android or iOS settings. Many Android applications do not trust user-installed CAs unless their developer opts in through Network Security Configuration. Certificate-pinned applications can still reject interception.
+
 ## Certificate setup
 
 Each installation generates its own **Proxyking Local CA**, valid for one year. Only the public certificate is exported. The private key stays in the Electron user-data directory (`%APPDATA%/Proxyking/certificates` on Windows, `~/Library/Application Support/Proxyking/certificates` on macOS; actual directory casing follows Electron's app name).
@@ -51,7 +70,7 @@ Each installation generates its own **Proxyking Local CA**, valid for one year. 
 
 Some browsers and runtimes use separate trust stores. Certificate-pinned apps need an appropriate debug configuration; installing a root certificate does not universally bypass pinning. Upstream TLS certificates remain validated.
 
-Restart browsers and other apps after trusting the CA. `SSLV3_ALERT_CERTIFICATE_UNKNOWN` means that client rejected Proxyking's generated site certificate: its process may not have reloaded the trust store, may use its own trust store, or may pin the server certificate.
+Restart browsers and other apps after trusting the CA. If iOS shows **This Connection Is Not Private** for `proxyking.test`, first confirm that **Proxyking Local CA** is enabled under Settings → General → About → Certificate Trust Settings, then restart Proxyking so cached host certificates are regenerated. `SSLV3_ALERT_CERTIFICATE_UNKNOWN` means that client rejected Proxyking's generated site certificate: its process may not have reloaded the trust store, may use its own trust store, or may pin the server certificate.
 After such a rejection, Proxyking learns that host for the current capture session and passes later connections through encrypted. The first attempt can fail before the client retries; pass-through entries are labeled `TUNNEL`. Restart capture after fixing certificate trust to try inspection again.
 
 ## Scope and limits
@@ -60,7 +79,7 @@ After such a rejection, Proxyking learns that host for the current capture sessi
 - TLS clients that offer only a private or unsupported ALPN protocol are passed through encrypted so the application keeps working. They appear as `TUNNEL` entries and their contents cannot be inspected.
 - Requests remain in memory until Clear, New, or application exit. Up to 128 KiB is retained per request/response body preview; the full payload is forwarded. Compressed previews are decoded within the same bound; binary bodies use base64.
 - Sessions are not persisted unless exported. HAR files contain captured headers, cookies, and payloads, including any credentials in them. Truncation is marked with custom HAR fields. Timing is total elapsed time, not a DNS/TLS phase breakdown.
-- WebSocket frame inspection, replay, breakpoints, mobile apps, and pinning bypass are not implemented.
+- WebSocket frame inspection, native mobile apps, and pinning bypass are not implemented. Android and iOS devices can use the desktop proxy through the local setup assistant.
 - Certificate trust can be installed and removed automatically for the current user on Windows and macOS. Linux remains manual. Do not share the private CA key. Certificates are not automatically renewed; remove the trusted CA and regenerate local certificate data when it expires.
 - Closing the app restores settings changed by automatic mode before stopping its listener. Restore manually configured app proxy settings yourself.
 
@@ -92,6 +111,7 @@ Outputs go to `release/`. Local packages are unsigned development builds. Public
 - `src/engine.js`: reusable capture engine and HAR export.
 - `src/network.js`: active-route private IPv4 detection.
 - `src/certificate.js`: local CA generation.
+- `src/device-setup.js`: local Android/iOS onboarding page and HTTPS trust verification.
 - `src/system-proxy/`: Windows/macOS proxy adapters and durable restoration journal.
 - `src/capture-session.js`: serialized start/stop and proxy restoration lifecycle.
 - `src/main.js`, `src/preload.js`: Electron lifecycle and restricted IPC bridge.

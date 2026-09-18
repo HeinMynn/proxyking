@@ -44,4 +44,42 @@ for (const file of files) {
   }
 }
 
+const certificateFiles = [
+  path.join(__dirname, '..', 'node_modules', 'http-mitm-proxy', 'dist', 'lib', 'ca.js'),
+  path.join(__dirname, '..', 'node_modules', 'http-mitm-proxy', 'lib', 'ca.ts')
+];
+
+for (const file of certificateFiles) {
+  if (!fs.existsSync(file)) throw new Error(`http-mitm-proxy certificate file is missing: ${file}`);
+  let source = fs.readFileSync(file, 'utf8');
+  let changed = false;
+  const safeSerial = 'return `01${sn.slice(2)}`;';
+  if (!source.includes(safeSerial)) {
+    if (!/return sn;/.test(source)) throw new Error(`Expected certificate serial code was not found in ${file}`);
+    source = source.replace(/return sn;/, () => safeSerial);
+    changed = true;
+  }
+  const oldValidity = file.endsWith('.ts')
+    ? `    certServer.validity.notAfter = new Date();
+    certServer.validity.notAfter.setFullYear(
+      certServer.validity.notBefore.getFullYear() + 1
+    );`
+    : `        certServer.validity.notAfter = new Date();
+        certServer.validity.notAfter.setFullYear(certServer.validity.notBefore.getFullYear() + 1);`;
+  const safeValidity = file.endsWith('.ts')
+    ? `    certServer.validity.notAfter = new Date(
+      Math.min(Date.now() + 90 * 86400000, this.CAcert.validity.notAfter.getTime() - 60000)
+    );`
+    : `        certServer.validity.notAfter = new Date(Math.min(Date.now() + 90 * 86400000, this.CAcert.validity.notAfter.getTime() - 60000));`;
+  if (!source.includes(safeValidity)) {
+    if (!source.includes(oldValidity)) throw new Error(`Expected server certificate validity code was not found in ${file}`);
+    source = source.replace(oldValidity, () => safeValidity);
+    changed = true;
+  }
+  if (changed) {
+    fs.writeFileSync(file, source);
+    patchedFiles++;
+  }
+}
+
 console.log(patchedFiles ? `Patched http-mitm-proxy in ${patchedFiles} file(s).` : 'http-mitm-proxy patches already applied.');

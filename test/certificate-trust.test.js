@@ -8,13 +8,28 @@ const {
   installMacCertificate, removeMacCertificate, macCertificateTrustStatus,
   installWindowsCertificate, removeWindowsCertificate, windowsCertificateTrustStatus
 } = require('../src/certificate-trust');
-const { ensureCertificate } = require('../src/certificate');
+const { ensureCertificate, refreshLeafCertificateCache, LEAF_CACHE_VERSION } = require('../src/certificate');
 
 async function certificateFixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-ca-status-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   return { certificatePath: await ensureCertificate(directory), pem: await fs.readFile(path.join(directory, 'certs', 'ca.pem'), 'utf8') };
 }
+
+test('leaf certificate cache migration preserves the root CA and removes stale host certificates', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-leaf-cache-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const certificatePath = await ensureCertificate(directory);
+  const rootBefore = await fs.readFile(certificatePath);
+  await fs.writeFile(path.join(directory, 'certs', 'stale.example.pem'), 'stale certificate');
+  await fs.writeFile(path.join(directory, 'keys', 'stale.example.key'), 'stale key');
+  assert.equal(await refreshLeafCertificateCache(directory), true);
+  assert.deepEqual(await fs.readFile(certificatePath), rootBefore);
+  await assert.rejects(fs.access(path.join(directory, 'certs', 'stale.example.pem')), { code: 'ENOENT' });
+  await assert.rejects(fs.access(path.join(directory, 'keys', 'stale.example.key')), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(path.join(directory, '.leaf-cache-version'), 'utf8'), LEAF_CACHE_VERSION);
+  assert.equal(await refreshLeafCertificateCache(directory), false);
+});
 
 test('macOS CA installation delegates the interactive prompt directly to security', async () => {
   const calls = [];

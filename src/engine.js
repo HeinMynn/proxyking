@@ -1,13 +1,18 @@
 const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const net = require('node:net');
+const fs = require('node:fs/promises');
 const { InspectionProxy } = require('./inspection-proxy');
+const { BreakpointFilter, EDIT_LIMIT, editableBody } = require('./traffic-tools');
+const { replay } = require('./replay');
 const zlib = require('node:zlib');
 const { getDomain } = require('tldts');
-const { ensureCertificate } = require('./certificate');
+const { ensureCertificate, refreshLeafCertificateCache } = require('./certificate');
+const { SETUP_VERIFY_HOST, inferDevicePlatform, renderSetupPage, renderVerifiedPage, setupScript } = require('./device-setup');
 const { version } = require('../package.json');
 
 const BODY_LIMIT = 128 * 1024;
+const UPSTREAM_HEADER_LIMIT = 128 * 1024;
 const QUIET_TLS_ERRORS = new Set([
   'ERR_SSL_NO_APPLICATION_PROTOCOL',
   'ERR_SSL_UNSUPPORTED_PROTOCOL',
@@ -88,10 +93,14 @@ class CaptureEngine extends EventEmitter {
     this.directory = directory;
     this.httpsAgent = httpsAgent;
     this.records = new Map();
+    this.devices = new Map();
+    this.deviceTrust = new Map();
     this.sockets = new Set();
     this.state = { running: false, paused: false, port: 8080, host };
     this.busy = false;
     this.notices = new Set();
+    this.breakpointRules = new Set();
+    this.pendingBreakpoints = new Map();
   }
   summary(record) {
     const { requestBody, responseBody, requestHeaders, responseHeaders, ...summary } = record;
@@ -99,10 +108,126 @@ class CaptureEngine extends EventEmitter {
   }
   list() { return [...this.records.values()].map(record => this.summary(record)); }
   detail(id) { return this.records.get(id) || null; }
+  deviceList() { return [...this.devices.values()]; }
   clear() { this.records.clear(); this.emit('cleared'); }
+  breakpointList() { return [...this.breakpointRules]; }
+  setBreakpoint(host, side, enabled) {
+    if (typeof host !== 'string' || !host || host.length > 255 || !['request', 'response'].includes(side) || typeof enabled !== 'boolean') throw new Error('Invalid breakpoint rule.');
+    const key = side + ':' + host.toLowerCase();
+    if (enabled) this.breakpointRules.add(key); else this.breakpointRules.delete(key);
+    this.emit('breakpoint-rules', this.breakpointList());
+    return this.breakpointList();
+  }
+  hasBreakpoint(host, side) { return this.breakpointRules.has(side + ':' + host.toLowerCase()); }
+  waitAtBreakpoint(side, record, original) {
+    const id = randomUUID();
+    return new Promise(resolve => {
+      const timer = setTimeout(() => this.resolveBreakpoint(id, { action: 'continue' }), 120000);
+      timer.unref?.();
+      this.pendingBreakpoints.set(id, { resolve, timer, original });
+      this.emit('breakpoint', { id, side, recordId: record.id, method: record.method, url: record.url, body: original.toString('utf8') });
+    });
+  }
+  resolveBreakpoint(id, decision = {}) {
+    const pending = this.pendingBreakpoints.get(id);
+    if (!pending) return false;
+    if (decision.action !== 'continue' && decision.action !== 'edit') throw new Error('Invalid breakpoint action.');
+    let body = pending.original;
+    if (decision.action === 'edit') {
+      if (typeof decision.body !== 'string' || Buffer.byteLength(decision.body) > EDIT_LIMIT) throw new Error('Edited body must be text under 1 MiB.');
+      body = Buffer.from(decision.body);
+    }
+    clearTimeout(pending.timer);
+    this.pendingBreakpoints.delete(id);
+    pending.resolve(body);
+    this.emit('breakpoint-resolved', id);
+    return true;
+  }
+  releaseBreakpoints() {
+    for (const id of this.pendingBreakpoints.keys()) this.resolveBreakpoint(id, { action: 'continue' });
+  }
+  replay(id, draft) { return replay(this, id, draft); }
   async prepareCertificate() {
     this.certificatePath = await ensureCertificate(this.directory);
+    await refreshLeafCertificateCache(this.directory);
     return this.certificatePath;
+  }
+  touchDevice(address, userAgent = '', trusted = false) {
+    const normalized = normalizeClientAddress(address);
+    if (!normalized) return null;
+    if (trusted && !this.deviceTrust.has(normalized)) this.deviceTrust.set(normalized, new Date().toISOString());
+    const remote = remoteDeviceAddress(normalized, this.state.host);
+    if (!remote) return null;
+    const previous = this.devices.get(remote);
+    const platform = inferDevicePlatform(userAgent);
+    const next = {
+      address: remote,
+      platform: platform === 'Unknown device' ? previous?.platform || platform : platform,
+      trustedAt: this.deviceTrust.get(normalized) || previous?.trustedAt || null,
+      lastSeen: new Date().toISOString()
+    };
+    this.devices.set(remote, next);
+    if (!previous || previous.platform !== next.platform || previous.trustedAt !== next.trustedAt) this.emit('device', next);
+    return next;
+  }
+  observeClientRequest(address, userAgent = '', secure = false) {
+    const remote = remoteDeviceAddress(address, this.state.host);
+    if (remote) this.touchDevice(remote, userAgent, secure);
+    return remote;
+  }
+  setupStatus(address, userAgent = '') {
+    const normalized = normalizeClientAddress(address);
+    const device = this.touchDevice(normalized, userAgent);
+    return {
+      address: device?.address || normalized || 'Unknown',
+      platform: device?.platform || inferDevicePlatform(userAgent),
+      trusted: this.deviceTrust.has(normalized),
+      trustedAt: this.deviceTrust.get(normalized) || null
+    };
+  }
+  setupUrl() { return `http://${this.state.host}:${this.state.port}/setup`; }
+  respondSetup(ctx, status, contentType, body, extraHeaders = {}) {
+    const request = ctx.clientToProxyRequest;
+    const payload = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
+    ctx.proxyToClientResponse.writeHead(status, {
+      'content-type': contentType,
+      'content-length': payload.length,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self' https://proxyking.test; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      ...extraHeaders
+    });
+    ctx.proxyToClientResponse.end(request.method === 'HEAD' ? undefined : payload);
+  }
+  serveSetup(ctx, url, clientAddress) {
+    const request = ctx.clientToProxyRequest;
+    const methodAllowed = request.method === 'GET' || request.method === 'HEAD';
+    const userAgent = request.headers['user-agent'] || '';
+    if (ctx.isSSL && url.hostname === SETUP_VERIFY_HOST && url.pathname === '/verify') {
+      if (!methodAllowed) { this.respondSetup(ctx, 405, 'text/plain; charset=utf-8', 'Method not allowed', { allow: 'GET, HEAD' }); return true; }
+      const normalized = normalizeClientAddress(clientAddress);
+      this.deviceTrust.set(normalized, new Date().toISOString());
+      this.touchDevice(normalized, userAgent, true);
+      this.respondSetup(ctx, 200, 'text/html; charset=utf-8', renderVerifiedPage(this.setupUrl()));
+      return true;
+    }
+    const localHost = ['127.0.0.1', 'localhost', '[::1]', this.state.host].includes(url.hostname);
+    const localPort = Number(url.port || (ctx.isSSL ? 443 : 80)) === this.state.port;
+    if (!localHost || !localPort || !url.pathname.startsWith('/setup')) return false;
+    if (!methodAllowed) { this.respondSetup(ctx, 405, 'text/plain; charset=utf-8', 'Method not allowed', { allow: 'GET, HEAD' }); return true; }
+    const status = this.setupStatus(clientAddress, userAgent);
+    if (url.pathname === '/setup' || url.pathname === '/setup/') {
+      this.respondSetup(ctx, 200, 'text/html; charset=utf-8', renderSetupPage({ host: this.state.host, port: this.state.port, ...status }));
+    } else if (url.pathname === '/setup/app.js') {
+      this.respondSetup(ctx, 200, 'text/javascript; charset=utf-8', setupScript);
+    } else if (url.pathname === '/setup/api/status') {
+      this.respondSetup(ctx, 200, 'application/json; charset=utf-8', JSON.stringify(status));
+    } else if (url.pathname === '/setup/ca.crt') {
+      this.respondSetup(ctx, 200, 'application/x-x509-ca-cert', this.caCertificate, { 'content-disposition': 'attachment; filename="Proxyking-CA.crt"' });
+    } else {
+      this.respondSetup(ctx, 404, 'text/plain; charset=utf-8', 'Setup resource not found');
+    }
+    return true;
   }
   publish(record) {
     if (this.records.has(record.id)) this.emit('record', this.summary(record));
@@ -115,6 +240,7 @@ class CaptureEngine extends EventEmitter {
     this.busy = true;
     try {
       await this.prepareCertificate();
+      this.caCertificate = await fs.readFile(this.certificatePath);
       const proxy = new InspectionProxy({ onPassthrough: connection => this.addPassthrough(connection) });
       this.proxy = proxy;
       let startupReject;
@@ -131,21 +257,23 @@ class CaptureEngine extends EventEmitter {
         if (!this.notices.has(message)) { this.notices.add(message); this.emit('notice', message); }
       });
       proxy.onRequest((ctx, callback) => {
-        if (this.state.paused) return callback();
         const req = ctx.clientToProxyRequest;
         const clientAddress = normalizeClientAddress(ctx.connectRequest?.socket?.remoteAddress || req.socket?.remoteAddress);
         let url;
         try { url = new URL(req.url, `${ctx.isSSL ? 'https' : 'http'}://${req.headers.host}`); }
         catch { return callback(new Error('Invalid request URL')); }
+        if (this.serveSetup(ctx, url, clientAddress)) return;
         // Reject loops into our own listener before forwarding.
         if (['127.0.0.1', 'localhost', '[::1]', this.state.host].includes(url.hostname) && Number(url.port || (ctx.isSSL ? 443 : 80)) === this.state.port) {
           ctx.proxyToClientResponse.writeHead(508); ctx.proxyToClientResponse.end('Proxy loop blocked'); return;
         }
+        if (this.state.paused) return callback();
+        const remoteDevice = this.observeClientRequest(clientAddress, req.headers['user-agent'], ctx.isSSL);
         const record = {
           id: randomUUID(), startedAt: Date.now(), method: req.method, url: url.href,
           host: url.host, domain: mainDomain(url.hostname), path: url.pathname + url.search, secure: ctx.isSSL,
           httpVersion: req.httpVersionMajor === 2 ? 'HTTP/2' : `HTTP/${req.httpVersion || '1.1'}`,
-          application: inferApplication(req.headers), remoteDevice: remoteDeviceAddress(clientAddress, this.state.host),
+          application: inferApplication(req.headers), remoteDevice,
           status: null, state: 'pending', duration: null, size: 0,
           requestSize: 0,
           requestHeaders: { ...req.headers }, responseHeaders: {},
@@ -155,8 +283,16 @@ class CaptureEngine extends EventEmitter {
         // Proxy credentials belong only to this hop.
         delete ctx.proxyToServerRequestOptions.headers['proxy-authorization'];
         delete ctx.proxyToServerRequestOptions.headers['proxy-connection'];
+        ctx.proxyToServerRequestOptions.maxHeaderSize = UPSTREAM_HEADER_LIMIT;
         this.records.set(record.id, record);
         this.publish(record);
+        if (this.hasBreakpoint(url.host, 'request') && editableBody(record.requestHeaders)) {
+          delete ctx.proxyToServerRequestOptions.headers['content-length'];
+          delete ctx.proxyToServerRequestOptions.headers.expect;
+          ctx.proxyToServerRequestOptions.headers['transfer-encoding'] = 'chunked';
+          record.requestHeaders = { ...ctx.proxyToServerRequestOptions.headers };
+          ctx.requestFilters.push(new BreakpointFilter(body => this.waitAtBreakpoint('request', record, body)));
+        }
         const request = bodyCollector();
         const response = bodyCollector();
         ctx.onRequestData((_ctx, chunk, done) => { if (this.records.has(record.id)) request.add(chunk); done(null, chunk); });
@@ -165,6 +301,11 @@ class CaptureEngine extends EventEmitter {
           record.status = ctx.serverToProxyResponse.statusCode;
           record.responseHeaders = { ...ctx.serverToProxyResponse.headers };
           record.contentType = String(record.responseHeaders['content-type'] || '');
+          if (this.hasBreakpoint(url.host, 'response') && editableBody(record.responseHeaders) &&
+              req.method !== 'HEAD' && ![204, 304].includes(record.status)) {
+            ctx.responseContentPotentiallyModified = true;
+            ctx.responseFilters.push(new BreakpointFilter(body => this.waitAtBreakpoint('response', record, body)));
+          }
           this.publish(record); done();
         });
         ctx.onResponseData((_ctx, chunk, done) => { record.size += chunk.length; if (this.records.has(record.id)) response.add(chunk); done(null, chunk); });
@@ -203,12 +344,14 @@ class CaptureEngine extends EventEmitter {
   }
   addPassthrough({ host, port, protocols, reason, clientAddress }) {
     if (this.state.paused) return;
+    const remoteDevice = remoteDeviceAddress(clientAddress, this.state.host);
+    if (remoteDevice) this.touchDevice(remoteDevice);
     const certificateRejected = reason === 'certificate-rejected';
     const startedAt = Date.now();
     const record = {
       id: randomUUID(), startedAt, method: 'TUNNEL', url: `tls://${host}:${port}`,
       host: `${host}:${port}`, domain: mainDomain(host), path: 'Encrypted pass-through', secure: true, tunneled: true,
-      application: 'Unknown app', remoteDevice: remoteDeviceAddress(clientAddress, this.state.host),
+      application: 'Unknown app', remoteDevice,
       status: 200, state: 'complete', duration: 0, size: 0,
       requestSize: 0,
       contentType: '', requestHeaders: { 'tls-alpn': protocols.join(', ') }, responseHeaders: {},
@@ -220,6 +363,7 @@ class CaptureEngine extends EventEmitter {
   async stop() {
     if (this.busy) throw new Error('The proxy is changing state. Please try again.');
     if (!this.proxy) return this.state;
+    this.releaseBreakpoints();
     for (const socket of this.sockets) socket.destroy();
     this.sockets.clear();
     this.proxy.httpAgent?.destroy();
