@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('proxyking', {
   replay: (id, draft) => ipcRenderer.invoke('capture:replay', id, draft),
   setBreakpoint: (host, side, enabled) => ipcRenderer.invoke('capture:set-breakpoint', host, side, enabled),
   resolveBreakpoint: (id, decision) => ipcRenderer.invoke('capture:resolve-breakpoint', id, decision),
+  updateSettings: settings => ipcRenderer.invoke('capture:update-settings', settings),
   copyText: text => ipcRenderer.invoke('capture:copy-text', text),
   deviceSetup: () => ipcRenderer.invoke('capture:device-setup'),
   certificate: () => ipcRenderer.invoke('capture:certificate'),

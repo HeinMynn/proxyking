@@ -15,6 +15,7 @@ let currentRecord = null;
 let renderQueued = false;
 let detailVersion = 0;
 let noticeTimer = null;
+let currentPage = 'traffic';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -24,6 +25,18 @@ function element(tag, className, text) {
 }
 function bytes(value = 0) { return value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1048576).toFixed(1)} MB`; }
 function colorHue(value) { return [...value].reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) % 360, 0); }
+function doNotInspectLines() { return $('doNotInspectRules').value.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#')); }
+function updateRuleCount() {
+  const count = doNotInspectLines().length;
+  $('doNotInspectCount').textContent = `${count} ${count === 1 ? 'rule' : 'rules'}`;
+}
+function showPage(page) {
+  currentPage = page;
+  $('mainArea').hidden = page !== 'traffic';
+  $('settingsPage').hidden = page !== 'settings';
+  $('settingsButton').classList.toggle('active', page === 'settings');
+  $('allTraffic').classList.toggle('active', page === 'traffic' && !selectedDomain && !selectedApp && !selectedDevice);
+}
 function notify(message) {
   clearTimeout(noticeTimer);
   noticeTimer = null;
@@ -111,7 +124,17 @@ function render() {
       element('span', 'cell-muted', record.duration === null ? '…' : `${record.duration} ms`),
       element('span', 'cell-muted', bytes(record.size))
     );
-    row.addEventListener('click', () => { selectedId = record.id; render(); loadDetail(); });
+    const select = () => {
+      if (selectedId === record.id && currentRecord?.id === record.id) return;
+      selectedId = record.id;
+      render();
+      loadDetail();
+    };
+    // Live records can replace a row between mouse-down and mouse-up, which
+    // cancels the resulting click (especially noticeable with macOS trackpads).
+    // Select on the initial pointer press; retain click for keyboard activation.
+    row.addEventListener('pointerdown', event => { if (event.button === 0) select(); });
+    row.addEventListener('click', event => { if (event.detail === 0) select(); });
     return row;
   });
   $('requests').replaceChildren(...rows);
@@ -130,7 +153,7 @@ function render() {
   $('footerHosts').textContent = hosts.length;
   $('appCount').textContent = apps.length;
   $('deviceCount').textContent = devices.length;
-  $('allTraffic').classList.toggle('active', !selectedDomain && !selectedApp && !selectedDevice);
+  $('allTraffic').classList.toggle('active', currentPage === 'traffic' && !selectedDomain && !selectedApp && !selectedDevice);
   $('apps').replaceChildren(...apps.map(app => {
     const button = element('button', `host-button${app === selectedApp ? ' selected' : ''}`);
     const icon = element('span', 'app-icon', app.slice(0, 1).toUpperCase());
@@ -380,7 +403,24 @@ $('continueBreakpoint').addEventListener('click', () => resolveActiveBreakpoint(
 $('sendBreakpoint').addEventListener('click', () => resolveActiveBreakpoint('edit'));
 $('breakpointDialog').addEventListener('cancel', event => { event.preventDefault(); resolveActiveBreakpoint('continue'); });
 
-$('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; selectedDevice = null; render(); });
+$('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; selectedDevice = null; showPage('traffic'); render(); });
+$('settingsButton').addEventListener('click', () => showPage('settings'));
+$('doNotInspectRules').addEventListener('input', updateRuleCount);
+$('addTelegramRules').addEventListener('click', () => {
+  const rules = new Set(doNotInspectLines());
+  ['*.telegram.org', '*.telegram.me', '*.t.me', '*.telegra.ph', '*.telegram-cdn.org'].forEach(rule => rules.add(rule));
+  $('doNotInspectRules').value = [...rules].join('\n');
+  updateRuleCount();
+});
+$('saveSettings').addEventListener('click', () => action(async () => {
+  $('saveSettings').disabled = true;
+  try {
+    const saved = await api.updateSettings({ doNotInspect: doNotInspectLines() });
+    $('doNotInspectRules').value = saved.doNotInspect.join('\n');
+    updateRuleCount();
+    notify('Settings saved. New matching connections will use encrypted pass-through.');
+  } finally { $('saveSettings').disabled = false; }
+}));
 $('search').addEventListener('input', scheduleRender);
 $('typeFilter').addEventListener('change', render);
 $('port').addEventListener('input', () => { if (!state.running) updateState({ ...state, port: Number($('port').value) }); });
@@ -416,6 +456,8 @@ action(async () => {
   snapshot.records.forEach(record => records.set(record.id, record));
   (snapshot.devices || []).forEach(device => knownDevices.set(device.address, device));
   (snapshot.breakpoints || []).forEach(rule => breakpointRules.add(rule));
+  $('doNotInspectRules').value = (snapshot.settings?.doNotInspect || []).join('\n');
+  updateRuleCount();
   updateState(snapshot.state);
   if (snapshot.notice) notify(snapshot.notice);
   if (snapshot.state.running) $('automaticProxy').checked = snapshot.state.mode === 'automatic';

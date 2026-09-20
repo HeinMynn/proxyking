@@ -1,0 +1,30 @@
+const net = require('node:net');
+
+const MAX_RULES = 500;
+
+function normalizeDoNotInspectRules(input) {
+  const values = Array.isArray(input) ? input : String(input || '').split(/\r?\n/);
+  if (values.length > MAX_RULES) throw new Error(`Do Not Inspect supports up to ${MAX_RULES} rules.`);
+  const rules = [];
+  for (const value of values) {
+    const rule = String(value).trim().toLowerCase().replace(/\.$/, '');
+    if (!rule || rule.startsWith('#')) continue;
+    const hostname = rule.startsWith('*.') ? rule.slice(2) : rule;
+    if (!hostname || hostname.length > 253 || /[\s/:?#@]/.test(hostname) ||
+        (!net.isIP(hostname) && !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(hostname))) {
+      throw new Error(`Invalid Do Not Inspect host: ${value}`);
+    }
+    const normalized = rule.startsWith('*.') ? `*.${hostname}` : hostname;
+    if (!rules.includes(normalized)) rules.push(normalized);
+  }
+  return rules;
+}
+
+function matchesDoNotInspect(hostname, rules) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  return rules.some(rule => rule.startsWith('*.')
+    ? host === rule.slice(2) || host.endsWith(`.${rule.slice(2)}`)
+    : host === rule);
+}
+
+module.exports = { normalizeDoNotInspectRules, matchesDoNotInspect, MAX_RULES };

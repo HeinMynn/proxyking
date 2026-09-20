@@ -9,6 +9,7 @@ const zlib = require('node:zlib');
 const { getDomain } = require('tldts');
 const { ensureCertificate, refreshLeafCertificateCache } = require('./certificate');
 const { SETUP_VERIFY_HOST, inferDevicePlatform, renderSetupPage, renderVerifiedPage, setupScript } = require('./device-setup');
+const { normalizeDoNotInspectRules } = require('./do-not-inspect');
 const { version } = require('../package.json');
 
 const BODY_LIMIT = 128 * 1024;
@@ -88,7 +89,7 @@ function bodyCollector(limit = BODY_LIMIT) {
 }
 
 class CaptureEngine extends EventEmitter {
-  constructor({ directory, httpsAgent, host = '127.0.0.1' } = {}) {
+  constructor({ directory, httpsAgent, host = '127.0.0.1', doNotInspect = [] } = {}) {
     super();
     this.directory = directory;
     this.httpsAgent = httpsAgent;
@@ -101,6 +102,7 @@ class CaptureEngine extends EventEmitter {
     this.notices = new Set();
     this.breakpointRules = new Set();
     this.pendingBreakpoints = new Map();
+    this.doNotInspect = normalizeDoNotInspectRules(doNotInspect);
   }
   summary(record) {
     const { requestBody, responseBody, requestHeaders, responseHeaders, ...summary } = record;
@@ -111,6 +113,11 @@ class CaptureEngine extends EventEmitter {
   deviceList() { return [...this.devices.values()]; }
   clear() { this.records.clear(); this.emit('cleared'); }
   breakpointList() { return [...this.breakpointRules]; }
+  setDoNotInspect(rules) {
+    this.doNotInspect = normalizeDoNotInspectRules(rules);
+    if (this.proxy) this.proxy.doNotInspect = this.doNotInspect;
+    return [...this.doNotInspect];
+  }
   setBreakpoint(host, side, enabled) {
     if (typeof host !== 'string' || !host || host.length > 255 || !['request', 'response'].includes(side) || typeof enabled !== 'boolean') throw new Error('Invalid breakpoint rule.');
     const key = side + ':' + host.toLowerCase();
@@ -241,7 +248,7 @@ class CaptureEngine extends EventEmitter {
     try {
       await this.prepareCertificate();
       this.caCertificate = await fs.readFile(this.certificatePath);
-      const proxy = new InspectionProxy({ onPassthrough: connection => this.addPassthrough(connection) });
+      const proxy = new InspectionProxy({ onPassthrough: connection => this.addPassthrough(connection), doNotInspect: this.doNotInspect });
       this.proxy = proxy;
       let startupReject;
       proxy.onError((ctx, error, kind) => {
@@ -355,7 +362,7 @@ class CaptureEngine extends EventEmitter {
       status: 200, state: 'complete', duration: 0, size: 0,
       requestSize: 0,
       contentType: '', requestHeaders: { 'tls-alpn': protocols.join(', ') }, responseHeaders: {},
-      requestBody: { text: '', size: 0 }, responseBody: { text: '', size: 0, note: certificateRejected ? 'The client rejected Proxyking’s generated certificate, so later connections to this host are passed through encrypted for the rest of this capture session.' : 'This TLS protocol is not supported by the HTTP inspector, so Proxyking passed the encrypted connection through unchanged.' }
+      requestBody: { text: '', size: 0 }, responseBody: { text: '', size: 0, note: reason === 'do-not-inspect' ? 'This host matches a Do Not Inspect rule, so Proxyking passed the encrypted connection through unchanged.' : certificateRejected ? 'The client rejected Proxyking’s generated certificate, so later connections to this host are passed through encrypted for the rest of this capture session.' : 'This TLS protocol is not supported by the HTTP inspector, so Proxyking passed the encrypted connection through unchanged.' }
     };
     this.records.set(record.id, record);
     this.publish(record);

@@ -3,6 +3,7 @@ const https = require('node:https');
 const http2 = require('node:http2');
 const { Proxy } = require('http-mitm-proxy');
 const { readAlpnProtocols, requiresPassthrough } = require('./tls-client-hello');
+const { matchesDoNotInspect } = require('./do-not-inspect');
 const { SETUP_VERIFY_HOST } = require('./device-setup');
 
 const expectedClientErrors = new Set([
@@ -46,11 +47,12 @@ function parseConnectTarget(authority) {
 }
 
 class InspectionProxy extends Proxy {
-  constructor({ onPassthrough } = {}) {
+  constructor({ onPassthrough, doNotInspect = [] } = {}) {
     super();
     this.onPassthrough = onPassthrough;
     this.rejectedHosts = new Set();
     this.incompatibleHosts = new Set();
+    this.doNotInspect = doNotInspect;
   }
 
   _createHttpsServer(options, callback) {
@@ -116,9 +118,10 @@ class InspectionProxy extends Proxy {
       return;
     }
     const { hostname, port } = target;
+    const excluded = matchesDoNotInspect(hostname, this.doNotInspect);
     const rejectedCertificate = this.rejectedHosts.has(hostname);
     const incompatibleTls = this.incompatibleHosts.has(hostname);
-    if (!rejectedCertificate && !incompatibleTls && !requiresPassthrough(head)) return super._onHttpServerConnectData(req, socket, head);
+    if (!excluded && !rejectedCertificate && !incompatibleTls && !requiresPassthrough(head)) return super._onHttpServerConnectData(req, socket, head);
     if (['127.0.0.1', 'localhost', '::1', this.httpHost].includes(hostname) && port === this.httpPort) {
       this._onError('PROXY_LOOP_ERROR', null, new Error('TLS pass-through loop blocked'));
       socket.destroy();
@@ -126,7 +129,7 @@ class InspectionProxy extends Proxy {
     }
     socket.pause();
     const upstream = net.connect({ host: hostname, port, allowHalfOpen: true }, () => {
-      this.onPassthrough?.({ host: hostname, port, protocols: readAlpnProtocols(head) || [], reason: rejectedCertificate ? 'certificate-rejected' : incompatibleTls ? 'unsupported-tls' : 'unsupported-alpn', clientAddress: socket.remoteAddress });
+      this.onPassthrough?.({ host: hostname, port, protocols: readAlpnProtocols(head) || [], reason: excluded ? 'do-not-inspect' : rejectedCertificate ? 'certificate-rejected' : incompatibleTls ? 'unsupported-tls' : 'unsupported-alpn', clientAddress: socket.remoteAddress });
       socket.pipe(upstream);
       upstream.pipe(socket);
       upstream.write(head);

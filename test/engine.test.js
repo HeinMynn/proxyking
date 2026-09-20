@@ -15,6 +15,7 @@ const { CaptureEngine, bodyCollector, inferApplication, mainDomain, normalizeCli
 const { ensureCertificate } = require('../src/certificate');
 const { readAlpnProtocols, requiresPassthrough } = require('../src/tls-client-hello');
 const { isCertificateRejection, isIncompatibleTls, isExpectedSocketClosure, parseConnectTarget } = require('../src/inspection-proxy');
+const { normalizeDoNotInspectRules, matchesDoNotInspect } = require('../src/do-not-inspect');
 const { SETUP_VERIFY_HOST, inferDevicePlatform } = require('../src/device-setup');
 
 async function fixture(t, options = {}) {
@@ -301,6 +302,20 @@ test('private ALPN protocols are passed through unchanged and identified as a tu
   assert.equal(engine.detail(record.id).requestHeaders['tls-alpn'], 'private-media');
 });
 
+test('Do Not Inspect rules bypass HTTPS interception immediately', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-excluded-origin-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await ensureCertificate(root);
+  const ca = await fs.readFile(path.join(root, 'certs', 'ca.pem'));
+  const { engine } = await fixture(t, { doNotInspect: ['localhost'] });
+  const port = await listen(t, https.createServer(await serverCertificate(root), (_req, res) => res.end('excluded origin')));
+  const response = await secureRequest(engine.state.port, port, ca);
+  assert.match(response, /excluded origin/);
+  const tunnel = engine.list().find(record => record.tunneled);
+  assert.ok(tunnel);
+  assert.match(engine.detail(tunnel.id).responseBody.note, /Do Not Inspect/);
+});
+
 test('HTTP/2-only TLS is inspected and translated through the capture pipeline', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-h2-inspection-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -355,6 +370,16 @@ test('CONNECT targets are parsed without allowing malformed authorities to throw
   for (const target of ['', 'https://example.com', 'example.com:bad', 'example.com:443/path', 'user@example.com:443', ' example.com:443']) {
     assert.equal(parseConnectTarget(target), null);
   }
+});
+
+test('Do Not Inspect rules normalize exact hosts, wildcards, comments and IP addresses', () => {
+  const rules = normalizeDoNotInspectRules([' *.Telegram.org. ', 'telegram.org', '# note', '', '192.0.2.10', '*.telegram.org']);
+  assert.deepEqual(rules, ['*.telegram.org', 'telegram.org', '192.0.2.10']);
+  assert.equal(matchesDoNotInspect('media.telegram.org', rules), true);
+  assert.equal(matchesDoNotInspect('telegram.org', ['*.telegram.org']), true);
+  assert.equal(matchesDoNotInspect('nottelegram.org', rules), false);
+  assert.equal(matchesDoNotInspect('192.0.2.10', rules), true);
+  assert.throws(() => normalizeDoNotInspectRules(['https://telegram.org/path']), /Invalid Do Not Inspect host/);
 });
 
 test('ClientHello ALPN parser distinguishes inspectable and pass-through protocols', async t => {

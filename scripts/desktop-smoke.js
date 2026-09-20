@@ -56,6 +56,16 @@ const assert = require('node:assert/strict');
     await page.locator('#appsToggle').click();
     await expect(page.locator('#apps')).toBeHidden();
     await page.locator('#appsToggle').click();
+    await page.locator('#settingsButton').click();
+    await expect(page.locator('#settingsPage')).toBeVisible();
+    await expect(page.locator('#mainArea')).toBeHidden();
+    await page.locator('#addTelegramRules').click();
+    await expect(page.locator('#doNotInspectRules')).toHaveValue(/\*\.telegram\.org/);
+    await page.locator('#saveSettings').click();
+    await expect(page.locator('#notice')).toContainText('Settings saved.');
+    await page.locator('#allTraffic').click();
+    await expect(page.locator('#mainArea')).toBeVisible();
+    await expect(page.locator('#settingsPage')).toBeHidden();
     const assertFooterAtBottom = async () => {
       const viewportHeight = await page.evaluate(() => window.innerHeight);
       const footer = await page.locator('.network-footer').boundingBox();

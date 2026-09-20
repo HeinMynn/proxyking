@@ -12,12 +12,14 @@ const {
   installMacCertificate, removeMacCertificate, macCertificateTrustStatus,
   installWindowsCertificate, removeWindowsCertificate, windowsCertificateTrustStatus
 } = require('./certificate-trust');
+const { SettingsStore } = require('./settings');
 
 if (process.platform !== 'win32') process.umask(0o077);
 
 let window;
 let engine;
 let capture;
+let settings;
 let allowQuit = false;
 let quitInProgress = false;
 let localAddress = '127.0.0.1';
@@ -57,7 +59,9 @@ if (primary) app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.dock.setIcon(iconPath);
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   localAddress = await detectLanAddress();
-  engine = new CaptureEngine({ directory: path.join(app.getPath('userData'), 'certificates'), host: localAddress });
+  settings = new SettingsStore(app.getPath('userData'));
+  const preferences = await settings.load();
+  engine = new CaptureEngine({ directory: path.join(app.getPath('userData'), 'certificates'), host: localAddress, doNotInspect: preferences.doNotInspect });
   const systemProxy = new SystemProxyManager({ directory: app.getPath('userData'), adapter: createAdapter() });
   capture = new CaptureSession(engine, systemProxy);
   for (const name of ['record', 'device', 'notice', 'cleared', 'breakpoint', 'breakpoint-rules', 'breakpoint-resolved']) {
@@ -66,7 +70,12 @@ if (primary) app.whenReady().then(async () => {
   for (const name of ['state', 'notice']) capture.on(name, data => {
     if (window && !window.isDestroyed()) window.webContents.send(`capture:${name}`, data);
   });
-  handle('capture:snapshot', () => ({ state: capture.state, records: engine.list(), devices: engine.deviceList(), breakpoints: engine.breakpointList(), platform: process.platform, version: app.getVersion(), notice: capture.notice }));
+  handle('capture:snapshot', () => ({ state: capture.state, records: engine.list(), devices: engine.deviceList(), breakpoints: engine.breakpointList(), settings: settings.get(), platform: process.platform, version: app.getVersion(), notice: capture.notice }));
+  handle('capture:update-settings', async next => {
+    const saved = await settings.update(next);
+    engine.setDoNotInspect(saved.doNotInspect);
+    return saved;
+  });
   handle('capture:start', async (port, automatic = true) => {
     if (quitInProgress) throw new Error('Proxyking is closing.');
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Choose a port from 1 to 65535.');
