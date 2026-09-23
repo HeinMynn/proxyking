@@ -42,6 +42,14 @@ For HTTPS without installing the CA system-wide, export it and pass its location
 curl.exe --proxy http://192.168.1.42:8080 --cacert Proxyking-CA.crt https://example.com
 ```
 
+## Advanced filters
+
+Open **Filters** above the connection list to filter or highlight traffic as it arrives. Conditions can inspect connection metadata, app or remote-device identity, request method/query/headers/body, and response status/headers/body. Text operators include contains, exact matching, prefixes, suffixes, existence checks, and regular expressions; sizes, durations, and status codes support numeric comparisons.
+
+**AND** adds a required condition to the current group. **OR** starts an alternative group, so the editor can express rules such as `(method is POST AND status is 201) OR (domain is example.com AND response body contains success)`. A filter may contain up to ten conditions. Incomplete or invalid rows are ignored while you edit, and results update immediately without an Apply button.
+
+Choose **Filter + highlight**, **Filter only**, or **Highlight only**. Positive text matches are marked in the selected connection's headers, query, body, and raw views. Named filter presets are saved locally in the desktop app.
+
 ## Replay and breakpoints
 
 Select a completed inspected request and click **Replay** to edit its method, URL, headers, or text body and send it again from the desktop. The replay appears as a new connection. Replaying a state-changing request can repeat a real action; inspect the URL and body before sending. Truncated, binary, or compressed request bodies are not offered for replay.

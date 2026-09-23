@@ -106,7 +106,20 @@ class CaptureEngine extends EventEmitter {
   }
   summary(record) {
     const { requestBody, responseBody, requestHeaders, responseHeaders, ...summary } = record;
-    return summary;
+    let query = '';
+    try { query = new URL(record.url).searchParams.toString(); } catch {}
+    return {
+      ...summary,
+      filterData: {
+        query,
+        requestHeaders: requestHeaders || {},
+        responseHeaders: responseHeaders || {},
+        requestBody: requestBody?.encoding === 'base64' ? '' : requestBody?.text || '',
+        responseBody: responseBody?.encoding === 'base64' ? '' : responseBody?.text || '',
+        requestContentType: String(requestHeaders?.['content-type'] || ''),
+        responseContentType: String(responseHeaders?.['content-type'] || record.contentType || '')
+      }
+    };
   }
   list() { return [...this.records.values()].map(record => this.summary(record)); }
   detail(id) { return this.records.get(id) || null; }

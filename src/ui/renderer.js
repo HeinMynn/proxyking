@@ -1,4 +1,5 @@
 const api = window.proxyking;
+const filterUI = window.ProxykingFilterUI;
 const $ = id => document.getElementById(id);
 const records = new Map();
 const knownDevices = new Map();
@@ -104,7 +105,8 @@ function filteredRecords() {
   return [...records.values()].filter(record => {
     if (selectedDomain && (record.domain || record.host) !== selectedDomain || selectedApp && record.application !== selectedApp || selectedDevice && record.remoteDevice !== selectedDevice) return false;
     if (!`${record.url} ${record.method} ${record.status || ''}`.toLowerCase().includes(search)) return false;
-    return filter === 'all' || filter === 'https' && record.secure || filter === 'errors' && (record.state === 'failed' || record.status >= 400) || filter === 'json' && /json/i.test(record.contentType || '') || filter === 'tunnels' && record.tunneled;
+    const basicMatch = filter === 'all' || filter === 'https' && record.secure || filter === 'errors' && (record.state === 'failed' || record.status >= 400) || filter === 'json' && /json/i.test(record.contentType || '') || filter === 'tunnels' && record.tunneled;
+    return basicMatch && (!filterUI.isFiltering() || filterUI.matches(record));
   }).reverse();
 }
 
@@ -112,7 +114,9 @@ function render() {
   const all = [...records.values()];
   const visible = filteredRecords();
   const rows = visible.map(record => {
-    const row = element('button', `request-row${selectedId === record.id ? ' selected' : ''}`);
+    const advancedMatch = filterUI.matches(record);
+    const highlighted = filterUI.isHighlighting() && advancedMatch;
+    const row = element('button', `request-row${selectedId === record.id ? ' selected' : ''}${highlighted ? ' filter-match' : ''}`);
     row.setAttribute('aria-label', `${record.method} ${record.url}, status ${record.status || record.state}`);
     const target = element('div', 'request-target');
     target.append(element('div', 'request-host', record.host), element('div', 'request-path', record.path));
@@ -228,24 +232,62 @@ async function loadDetail() {
   renderMessages();
 }
 
-function pairs(values, emptyText) {
+function highlightedText(value, matchers = []) {
+  const text = String(value ?? '');
+  const fragment = document.createDocumentFragment();
+  if (!matchers.length || !text) { fragment.append(document.createTextNode(text)); return fragment; }
+  const ranges = [];
+  for (const matcher of matchers) {
+    if (matcher instanceof RegExp) {
+      const regex = new RegExp(matcher.source, matcher.flags.includes('g') ? matcher.flags : matcher.flags + 'g');
+      let match;
+      while ((match = regex.exec(text)) && ranges.length < 500) {
+        if (!match[0].length) { regex.lastIndex += 1; continue; }
+        ranges.push([match.index, match.index + match[0].length]);
+      }
+    } else {
+      const needle = String(matcher).toLowerCase();
+      let from = 0; let index;
+      while (needle && (index = text.toLowerCase().indexOf(needle, from)) >= 0 && ranges.length < 500) {
+        ranges.push([index, index + needle.length]); from = index + needle.length;
+      }
+    }
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const range of ranges) {
+    const last = merged.at(-1);
+    if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]); else merged.push([...range]);
+  }
+  let cursor = 0;
+  for (const [start, end] of merged) {
+    if (start > cursor) fragment.append(document.createTextNode(text.slice(cursor, start)));
+    const mark = element('mark', 'filter-text-match', text.slice(start, end)); fragment.append(mark); cursor = end;
+  }
+  if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)));
+  return fragment;
+}
+
+function pairs(values, emptyText, matchers = []) {
   const entries = Object.entries(values || {});
   if (!entries.length) return element('div', 'placeholder', emptyText);
   const fragment = document.createDocumentFragment();
   for (const [key, raw] of entries) {
     const row = element('div', 'kv');
-    row.append(element('span', 'key', key), element('span', 'value', Array.isArray(raw) ? raw.join('\n') : String(raw ?? '')));
+    const keyNode = element('span', 'key'); keyNode.append(highlightedText(key, matchers));
+    const valueNode = element('span', 'value'); valueNode.append(highlightedText(Array.isArray(raw) ? raw.join('\n') : String(raw ?? ''), matchers));
+    row.append(keyNode, valueNode);
     fragment.append(row);
   }
   return fragment;
 }
 
-function prettyBody(body, pending) {
+function prettyBody(body, pending, matchers = []) {
   const container = document.createDocumentFragment();
   if (body?.note) container.append(element('p', 'body-note', body.note));
   let value = body?.text || (pending ? 'Waiting for body…' : 'No body');
   if (body?.encoding !== 'base64' && !body?.truncated && body?.text) { try { value = JSON.stringify(JSON.parse(body.text), null, 2); } catch {} }
-  container.append(element('pre', '', value));
+  const pre = element('pre'); pre.append(highlightedText(value, matchers)); container.append(pre);
   return container;
 }
 
@@ -268,10 +310,11 @@ function renderSide(side) {
   const content = $(`${side}Content`);
   if (!currentRecord) return;
   const view = views[side];
-  if (view === 'headers') content.replaceChildren(pairs(currentRecord[`${side}Headers`], `No ${side} headers.`));
-  else if (view === 'query') content.replaceChildren(pairs(queryValues(side, currentRecord), side === 'request' ? 'No query parameters.' : 'No redirect query parameters.'));
-  else if (view === 'body') content.replaceChildren(prettyBody(currentRecord[`${side}Body`], currentRecord.state === 'pending'));
-  else content.replaceChildren(element('pre', '', rawMessage(side, currentRecord)));
+  const matchers = filterUI.isHighlighting() ? filterUI.matchers(side, view) : [];
+  if (view === 'headers') content.replaceChildren(pairs(currentRecord[`${side}Headers`], `No ${side} headers.`, matchers));
+  else if (view === 'query') content.replaceChildren(pairs(queryValues(side, currentRecord), side === 'request' ? 'No query parameters.' : 'No redirect query parameters.', matchers));
+  else if (view === 'body') content.replaceChildren(prettyBody(currentRecord[`${side}Body`], currentRecord.state === 'pending', matchers));
+  else { const pre = element('pre'); pre.append(highlightedText(rawMessage(side, currentRecord), matchers)); content.replaceChildren(pre); }
 }
 function renderMessages() { renderSide('request'); renderSide('response'); }
 
@@ -449,6 +492,8 @@ api.on('breakpoint-resolved', id => {
 });
 
 api.on('cleared', () => { records.clear(); selectedDomain = null; selectedApp = null; resetSelection(); render(); });
+
+filterUI.initialize(() => { scheduleRender(); if (currentRecord) renderMessages(); });
 
 action(async () => {
   const snapshot = await api.snapshot();

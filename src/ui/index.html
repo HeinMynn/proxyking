@@ -55,7 +55,23 @@
           <div><h1>Connections</h1><span id="visibleCount">0 requests</span></div>
           <label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search URL, host, method, status…" aria-label="Search connections"><kbd>/</kbd></label>
           <select id="typeFilter" aria-label="Filter connections"><option value="all">All traffic</option><option value="https">HTTPS</option><option value="errors">Errors</option><option value="json">JSON</option><option value="tunnels">Tunnels</option></select>
+          <button id="advancedFilterToggle" class="advanced-filter-toggle" type="button" aria-expanded="false" aria-controls="advancedFilterPanel">Filters <b id="advancedFilterBadge">0</b></button>
         </div>
+        <section id="advancedFilterPanel" class="advanced-filter-panel" hidden>
+          <header><div><strong>Advanced filters</strong><span>Changes update results immediately.</span></div><button id="closeAdvancedFilter" type="button" aria-label="Close advanced filters">✕</button></header>
+          <div class="filter-settings">
+            <label>Display <select id="advancedFilterMode"><option value="both">Filter + highlight</option><option value="filter">Filter only</option><option value="highlight">Highlight only</option></select></label>
+            <label>Saved filter <select id="savedFilterSelect"><option value="">Choose a preset…</option></select></label>
+            <button id="deleteSavedFilter" type="button" disabled>Delete preset</button>
+            <span id="advancedFilterCount">1 of 10 conditions</span>
+          </div>
+          <div id="advancedFilterGroups" class="advanced-filter-groups"></div>
+          <footer>
+            <button id="clearAdvancedFilters" type="button">Clear all</button>
+            <label class="save-filter-name"><span>Preset name</span><input id="savedFilterName" maxlength="60" placeholder="API errors"></label>
+            <button id="saveAdvancedFilter" type="button">Save filter</button>
+          </footer>
+        </section>
         <div class="connection-table-head"><span>METHOD</span><span>HOST / PATH</span><span>STATUS</span><span>TYPE</span><span>TIME</span><span>SIZE</span></div>
         <div id="requests" class="requests"></div>
         <div id="empty" class="empty"><div class="empty-symbol">⇄</div><h2>Ready to capture</h2><p>Press Start, then browse normally.</p><button id="emptySetup">Connection setup</button></div>
@@ -132,6 +148,8 @@
     <label>Body <textarea id="breakpointBody" spellcheck="false"></textarea></label>
     <div class="traffic-tool-actions"><button id="continueBreakpoint">Continue original</button><button id="sendBreakpoint">Send edited body</button></div>
   </dialog>
+  <script src="advanced-filter.js"></script>
+  <script src="filter-ui.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -128,7 +128,13 @@ test('HTTP POST forwards intact, strips proxy credentials, captures bodies and e
   }));
   const result = await request(engine.state.port, `http://127.0.0.1:${port}/echo?q=yes`, 'hello', { 'content-type': 'text/plain', 'proxy-authorization': 'secret' });
   assert.equal(result.status, 201); assert.deepEqual(JSON.parse(result.body), { received: 'hello' });
-  const record = engine.detail(engine.list()[0].id);
+  const summary = engine.list()[0];
+  assert.equal(summary.filterData.query, 'q=yes');
+  assert.equal(summary.filterData.requestHeaders['content-type'], 'text/plain');
+  assert.equal(summary.filterData.requestBody, 'hello');
+  assert.equal(summary.filterData.responseBody, '{"received":"hello"}');
+  assert.equal(summary.filterData.responseContentType, 'application/json');
+  const record = engine.detail(summary.id);
   assert.equal(record.requestBody.text, 'hello'); assert.equal(record.state, 'complete');
   assert.equal(record.responseBody.text, '{"received":"hello"}');
   const har = engine.exportHar(); assert.equal(har.log.entries[0].response.status, 201);
