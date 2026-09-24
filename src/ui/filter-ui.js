@@ -4,7 +4,6 @@
   const $ = id => document.getElementById(id);
   const STORAGE_KEY = 'proxyking.savedFilters.v1';
   let groups = Filter.normalizeGroups();
-  let mode = 'both';
   let onChange = () => {};
 
   function element(tag, className, text) {
@@ -158,19 +157,18 @@
       $('advancedFilterPanel').hidden = true;
       $('advancedFilterToggle').setAttribute('aria-expanded', 'false');
     });
-    $('advancedFilterMode').addEventListener('change', () => { mode = $('advancedFilterMode').value; update(false); });
     $('clearAdvancedFilters').addEventListener('click', () => { groups = Filter.normalizeGroups(); $('savedFilterSelect').value = ''; $('savedFilterName').value = ''; update(true); });
     $('savedFilterSelect').addEventListener('change', () => {
       const preset = savedFilters()[$('savedFilterSelect').value];
       $('deleteSavedFilter').disabled = !$('savedFilterSelect').value;
       if (!preset) return;
-      groups = Filter.normalizeGroups(preset.groups); mode = ['filter', 'highlight', 'both'].includes(preset.mode) ? preset.mode : 'both';
-      $('advancedFilterMode').value = mode; $('savedFilterName').value = $('savedFilterSelect').value; update(true);
+      groups = Filter.normalizeGroups(preset.groups);
+      $('savedFilterName').value = $('savedFilterSelect').value; update(true);
     });
     $('saveAdvancedFilter').addEventListener('click', () => {
       const name = $('savedFilterName').value.trim();
       if (!name) { $('savedFilterName').focus(); return; }
-      const presets = savedFilters(); presets[name] = { groups, mode };
+      const presets = savedFilters(); presets[name] = { groups };
       if (writeSavedFilters(presets)) renderPresets(name);
     });
     $('deleteSavedFilter').addEventListener('click', () => {
@@ -183,9 +181,9 @@
   window.ProxykingFilterUI = {
     initialize,
     matches: record => Filter.matches(record, groups),
-    isFiltering: () => activeCount() > 0 && (mode === 'filter' || mode === 'both'),
-    isHighlighting: () => activeCount() > 0 && (mode === 'highlight' || mode === 'both'),
-    matchers: (side, view) => Filter.highlightMatchers(groups, side, view),
+    isFiltering: () => activeCount() > 0,
+    isHighlighting: () => false,
+    matchers: () => [],
     activeCount
   };
 })();

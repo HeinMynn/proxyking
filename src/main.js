@@ -61,7 +61,13 @@ if (primary) app.whenReady().then(async () => {
   localAddress = await detectLanAddress();
   settings = new SettingsStore(app.getPath('userData'));
   const preferences = await settings.load();
-  engine = new CaptureEngine({ directory: path.join(app.getPath('userData'), 'certificates'), host: localAddress, doNotInspect: preferences.doNotInspect });
+  engine = new CaptureEngine({
+    directory: path.join(app.getPath('userData'), 'certificates'), host: localAddress,
+    doNotInspect: preferences.doNotInspect,
+    excludeInspectApps: preferences.excludeInspectApps,
+    excludeCaptureHosts: preferences.excludeCaptureHosts,
+    excludeCaptureApps: preferences.excludeCaptureApps
+  });
   const systemProxy = new SystemProxyManager({ directory: app.getPath('userData'), adapter: createAdapter() });
   capture = new CaptureSession(engine, systemProxy);
   for (const name of ['record', 'device', 'notice', 'cleared', 'breakpoint', 'breakpoint-rules', 'breakpoint-resolved']) {
@@ -73,7 +79,8 @@ if (primary) app.whenReady().then(async () => {
   handle('capture:snapshot', () => ({ state: capture.state, records: engine.list(), devices: engine.deviceList(), breakpoints: engine.breakpointList(), settings: settings.get(), platform: process.platform, version: app.getVersion(), notice: capture.notice }));
   handle('capture:update-settings', async next => {
     const saved = await settings.update(next);
-    engine.setDoNotInspect(saved.doNotInspect);
+    engine.setInspectionExclusions({ hosts: saved.doNotInspect, apps: saved.excludeInspectApps });
+    engine.setCaptureExclusions({ hosts: saved.excludeCaptureHosts, apps: saved.excludeCaptureApps });
     return saved;
   });
   handle('capture:start', async (port, automatic = true) => {

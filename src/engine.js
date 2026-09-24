@@ -9,7 +9,7 @@ const zlib = require('node:zlib');
 const { getDomain } = require('tldts');
 const { ensureCertificate, refreshLeafCertificateCache } = require('./certificate');
 const { SETUP_VERIFY_HOST, inferDevicePlatform, renderSetupPage, renderVerifiedPage, setupScript } = require('./device-setup');
-const { normalizeDoNotInspectRules } = require('./do-not-inspect');
+const { normalizeDoNotInspectRules, normalizeHostRules, normalizeAppRules, matchesDoNotInspect } = require('./do-not-inspect');
 const { version } = require('../package.json');
 
 const BODY_LIMIT = 128 * 1024;
@@ -89,7 +89,7 @@ function bodyCollector(limit = BODY_LIMIT) {
 }
 
 class CaptureEngine extends EventEmitter {
-  constructor({ directory, httpsAgent, host = '127.0.0.1', doNotInspect = [] } = {}) {
+  constructor({ directory, httpsAgent, host = '127.0.0.1', doNotInspect = [], excludeInspectApps = [], excludeCaptureHosts = [], excludeCaptureApps = [] } = {}) {
     super();
     this.directory = directory;
     this.httpsAgent = httpsAgent;
@@ -103,6 +103,10 @@ class CaptureEngine extends EventEmitter {
     this.breakpointRules = new Set();
     this.pendingBreakpoints = new Map();
     this.doNotInspect = normalizeDoNotInspectRules(doNotInspect);
+    this.excludeInspectApps = normalizeAppRules(excludeInspectApps);
+    this.learnedInspectionExclusionHosts = new Set();
+    this.excludeCaptureHosts = normalizeHostRules(excludeCaptureHosts, 'Capture exclusions');
+    this.excludeCaptureApps = normalizeAppRules(excludeCaptureApps);
   }
   summary(record) {
     const { requestBody, responseBody, requestHeaders, responseHeaders, ...summary } = record;
@@ -126,10 +130,21 @@ class CaptureEngine extends EventEmitter {
   deviceList() { return [...this.devices.values()]; }
   clear() { this.records.clear(); this.emit('cleared'); }
   breakpointList() { return [...this.breakpointRules]; }
-  setDoNotInspect(rules) {
-    this.doNotInspect = normalizeDoNotInspectRules(rules);
+  setInspectionExclusions({ hosts, apps }) {
+    this.doNotInspect = normalizeDoNotInspectRules(hosts);
+    this.excludeInspectApps = normalizeAppRules(apps);
     if (this.proxy) this.proxy.doNotInspect = this.doNotInspect;
-    return [...this.doNotInspect];
+    return { hosts: [...this.doNotInspect], apps: [...this.excludeInspectApps] };
+  }
+  setCaptureExclusions({ hosts, apps }) {
+    this.excludeCaptureHosts = normalizeHostRules(hosts, 'Capture exclusions');
+    this.excludeCaptureApps = normalizeAppRules(apps);
+    return { hosts: [...this.excludeCaptureHosts], apps: [...this.excludeCaptureApps] };
+  }
+  isCaptureExcluded(host, application = '') {
+    return matchesDoNotInspect(host, this.doNotInspect) || this.learnedInspectionExclusionHosts.has(String(host).toLowerCase()) ||
+      this.excludeInspectApps.some(rule => rule.toLowerCase() === application.toLowerCase()) ||
+      matchesDoNotInspect(host, this.excludeCaptureHosts) || this.excludeCaptureApps.some(rule => rule.toLowerCase() === application.toLowerCase());
   }
   setBreakpoint(host, side, enabled) {
     if (typeof host !== 'string' || !host || host.length > 255 || !['request', 'response'].includes(side) || typeof enabled !== 'boolean') throw new Error('Invalid breakpoint rule.');
@@ -288,12 +303,19 @@ class CaptureEngine extends EventEmitter {
           ctx.proxyToClientResponse.writeHead(508); ctx.proxyToClientResponse.end('Proxy loop blocked'); return;
         }
         if (this.state.paused) return callback();
+        const application = inferApplication(req.headers);
+        if (ctx.isSSL && this.excludeInspectApps.some(rule => rule.toLowerCase() === application.toLowerCase()) &&
+            !this.proxy.doNotInspect.includes(url.hostname)) {
+          this.learnedInspectionExclusionHosts.add(url.hostname.toLowerCase());
+          this.proxy.doNotInspect = [...this.proxy.doNotInspect, url.hostname];
+        }
+        if (this.isCaptureExcluded(url.hostname, application)) return callback();
         const remoteDevice = this.observeClientRequest(clientAddress, req.headers['user-agent'], ctx.isSSL);
         const record = {
           id: randomUUID(), startedAt: Date.now(), method: req.method, url: url.href,
           host: url.host, domain: mainDomain(url.hostname), path: url.pathname + url.search, secure: ctx.isSSL,
           httpVersion: req.httpVersionMajor === 2 ? 'HTTP/2' : `HTTP/${req.httpVersion || '1.1'}`,
-          application: inferApplication(req.headers), remoteDevice,
+          application, remoteDevice,
           status: null, state: 'pending', duration: null, size: 0,
           requestSize: 0,
           requestHeaders: { ...req.headers }, responseHeaders: {},
@@ -363,7 +385,7 @@ class CaptureEngine extends EventEmitter {
     } finally { this.busy = false; }
   }
   addPassthrough({ host, port, protocols, reason, clientAddress }) {
-    if (this.state.paused) return;
+    if (this.state.paused || this.isCaptureExcluded(host)) return;
     const remoteDevice = remoteDeviceAddress(clientAddress, this.state.host);
     if (remoteDevice) this.touchDevice(remoteDevice);
     const certificateRejected = reason === 'certificate-rejected';

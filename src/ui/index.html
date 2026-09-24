@@ -50,6 +50,20 @@
       </div>
     </aside>
     <main id="mainArea" class="main-area">
+      <section id="advancedFilterPanel" class="advanced-filter-panel" hidden>
+        <header><div><strong>Advanced filters</strong><span>Changes update results immediately.</span></div><button id="closeAdvancedFilter" type="button" aria-label="Close advanced filters">✕</button></header>
+        <div class="filter-settings">
+          <label>Saved filter <select id="savedFilterSelect"><option value="">Choose a preset…</option></select></label>
+          <button id="deleteSavedFilter" type="button" disabled>Delete preset</button>
+          <span id="advancedFilterCount">1 of 10 conditions</span>
+        </div>
+        <div id="advancedFilterGroups" class="advanced-filter-groups"></div>
+        <footer>
+          <button id="clearAdvancedFilters" type="button">Clear all</button>
+          <label class="save-filter-name"><span>Preset name</span><input id="savedFilterName" maxlength="60" placeholder="API errors"></label>
+          <button id="saveAdvancedFilter" type="button">Save filter</button>
+        </footer>
+      </section>
       <section class="connections-panel">
         <div class="panel-toolbar">
           <div><h1>Connections</h1><span id="visibleCount">0 requests</span></div>
@@ -57,21 +71,6 @@
           <select id="typeFilter" aria-label="Filter connections"><option value="all">All traffic</option><option value="https">HTTPS</option><option value="errors">Errors</option><option value="json">JSON</option><option value="tunnels">Tunnels</option></select>
           <button id="advancedFilterToggle" class="advanced-filter-toggle" type="button" aria-expanded="false" aria-controls="advancedFilterPanel">Filters <b id="advancedFilterBadge">0</b></button>
         </div>
-        <section id="advancedFilterPanel" class="advanced-filter-panel" hidden>
-          <header><div><strong>Advanced filters</strong><span>Changes update results immediately.</span></div><button id="closeAdvancedFilter" type="button" aria-label="Close advanced filters">✕</button></header>
-          <div class="filter-settings">
-            <label>Display <select id="advancedFilterMode"><option value="both">Filter + highlight</option><option value="filter">Filter only</option><option value="highlight">Highlight only</option></select></label>
-            <label>Saved filter <select id="savedFilterSelect"><option value="">Choose a preset…</option></select></label>
-            <button id="deleteSavedFilter" type="button" disabled>Delete preset</button>
-            <span id="advancedFilterCount">1 of 10 conditions</span>
-          </div>
-          <div id="advancedFilterGroups" class="advanced-filter-groups"></div>
-          <footer>
-            <button id="clearAdvancedFilters" type="button">Clear all</button>
-            <label class="save-filter-name"><span>Preset name</span><input id="savedFilterName" maxlength="60" placeholder="API errors"></label>
-            <button id="saveAdvancedFilter" type="button">Save filter</button>
-          </footer>
-        </section>
         <div class="connection-table-head"><span>METHOD</span><span>HOST / PATH</span><span>STATUS</span><span>TYPE</span><span>TIME</span><span>SIZE</span></div>
         <div id="requests" class="requests"></div>
         <div id="empty" class="empty"><div class="empty-symbol">⇄</div><h2>Ready to capture</h2><p>Press Start, then browse normally.</p><button id="emptySetup">Connection setup</button></div>
@@ -80,12 +79,12 @@
       <section class="exchange">
         <article class="message-panel">
           <div class="message-heading"><div><span class="direction upload">↑</span><strong>Request</strong></div><span id="requestSummary">No request selected</span></div>
-          <nav class="data-tabs" data-side="request"><button data-view="headers" class="selected">Header</button><button data-view="query">Query</button><button data-view="body">Body</button><button data-view="raw">Raw</button></nav>
+          <nav class="data-tabs" data-side="request"><button data-view="headers" class="selected">Header</button><button data-view="query">Query</button><button data-view="body">Body</button><button data-view="raw">Raw</button><label class="raw-search" hidden><span>⌕</span><input id="requestRawSearch" type="search" placeholder="Search request raw…" aria-label="Search request raw"></label></nav>
           <div id="requestContent" class="message-content"><div class="placeholder">Select a connection above.</div></div>
         </article>
         <article class="message-panel">
           <div class="message-heading"><div><span class="direction download">↓</span><strong>Response</strong></div><span id="responseSummary">No response selected</span></div>
-          <nav class="data-tabs" data-side="response"><button data-view="headers" class="selected">Header</button><button data-view="query">Query</button><button data-view="body">Body</button><button data-view="raw">Raw</button></nav>
+          <nav class="data-tabs" data-side="response"><button data-view="headers" class="selected">Header</button><button data-view="query">Query</button><button data-view="body">Body</button><button data-view="raw">Raw</button><label class="raw-search" hidden><span>⌕</span><input id="responseRawSearch" type="search" placeholder="Search response raw…" aria-label="Search response raw"></label></nav>
           <div id="responseContent" class="message-content"><div class="placeholder">Select a connection above.</div></div>
         </article>
       </section>
@@ -93,11 +92,14 @@
     <main id="settingsPage" class="settings-page" hidden>
       <header class="settings-header"><div><div class="eyebrow">PROXYKING</div><h1>Settings</h1><p>Control how traffic is inspected.</p></div></header>
       <section class="settings-card">
-        <div class="settings-card-heading"><div><h2>Do Not Inspect</h2><p>Matching HTTPS hosts pass through encrypted and appear as TUNNEL. Changes apply to new connections immediately.</p></div><span id="doNotInspectCount" class="settings-count">0 rules</span></div>
-        <label for="doNotInspectRules">Host patterns</label>
+        <div class="settings-card-heading"><div><h2>Exclude from capture</h2><p>Matching traffic is forwarded but does not appear in connections or HAR exports. HTTPS hosts also skip inspection.</p></div><span id="doNotInspectCount" class="settings-count">0 rules</span></div>
+        <label for="doNotInspectRules">Website and host patterns</label>
         <textarea id="doNotInspectRules" spellcheck="false" placeholder="*.example.com&#10;api.example.net&#10;192.0.2.10"></textarea>
         <p class="settings-help">Enter one hostname, wildcard domain, or IP address per line. A wildcard such as <code>*.telegram.org</code> matches the base domain and all subdomains. URLs and paths are not accepted.</p>
-        <div class="settings-actions"><button id="addTelegramRules">Add Telegram defaults</button><button id="saveSettings" class="primary-action">Save settings</button></div>
+        <label for="excludeInspectApps" class="settings-sub-label">Detected app names</label>
+        <textarea id="excludeInspectApps" class="settings-app-list" spellcheck="false" placeholder="Telegram&#10;Google Chrome&#10;Postman"></textarea>
+        <p class="settings-help">App names are learned from identifiable HTTP traffic. Once detected, later HTTPS connections to their hosts also bypass inspection and remain excluded.</p>
+        <div class="settings-actions"><button id="addTelegramRules">Exclude Telegram</button><button id="saveSettings" class="primary-action">Save settings</button></div>
       </section>
     </main>
   </div>
@@ -148,6 +150,15 @@
     <label>Body <textarea id="breakpointBody" spellcheck="false"></textarea></label>
     <div class="traffic-tool-actions"><button id="continueBreakpoint">Continue original</button><button id="sendBreakpoint">Send edited body</button></div>
   </dialog>
+  <div id="connectionContextMenu" class="context-menu" role="menu" hidden>
+    <button data-action="copy" role="menuitem">Copy URL</button>
+    <div class="context-menu-separator"></div>
+    <button data-action="hide-request" role="menuitem">Hide this request</button>
+    <button data-action="hide-host" role="menuitem">Hide this host for this session</button>
+    <div class="context-menu-separator"></div>
+    <button data-action="exclude-host" role="menuitem">Exclude host from capture</button>
+    <button data-action="exclude-app" role="menuitem">Exclude app from capture</button>
+  </div>
   <script src="advanced-filter.js"></script>
   <script src="filter-ui.js"></script>
   <script src="renderer.js"></script>

@@ -79,7 +79,7 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
 .settings-header { max-width: 860px; margin: 0 auto 24px; }
 .settings-header h1 { margin: 0 0 7px; font-size: 25px; font-weight: 600; }
 .settings-header p { margin: 0; color: var(--muted); }
-.settings-card { max-width: 860px; margin: 0 auto; padding: 24px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); box-shadow: 0 12px 40px #0002; }
+.settings-card { max-width: 860px; margin: 0 auto 18px; padding: 24px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); box-shadow: 0 12px 40px #0002; }
 .settings-card-heading { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
 .settings-card h2 { margin: 0 0 7px; font-size: 16px; }
 .settings-card p { margin: 0; color: var(--muted); line-height: 1.6; }
@@ -87,11 +87,28 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
 .settings-card label { display: block; margin-bottom: 8px; color: #c7d1de; font-size: 11px; font-weight: 600; }
 .settings-card textarea { width: 100%; min-height: 260px; resize: vertical; padding: 13px; border: 1px solid var(--line); border-radius: 7px; outline: 0; background: #09101a; color: #d8e1ec; font: 11px/1.7 Consolas, monospace; }
 .settings-card textarea:focus { border-color: #5379ad; box-shadow: 0 0 0 2px #5379ad22; }
+.settings-card textarea.settings-app-list { min-height: 130px; }
+.settings-card .settings-sub-label { margin-top: 19px; }
 .settings-card .settings-help { margin-top: 10px; font-size: 10px; }
 .settings-help code { color: var(--green); }
 .settings-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
 .settings-actions button { padding: 8px 12px; }
 .settings-actions .primary-action { border-color: #346448; background: #173526; color: var(--green); }
+
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 245px;
+  padding: 6px;
+  border: 1px solid #35445a;
+  border-radius: 8px;
+  background: #141e2b;
+  box-shadow: 0 15px 45px #000b;
+}
+.context-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; background: transparent; text-align: left; color: #c5d0dd; font-size: 10px; }
+.context-menu button:hover,.context-menu button:focus-visible { background: #223247; color: #fff; }
+.context-menu button:disabled { color: #596779; background: transparent; }
+.context-menu-separator { height: 1px; margin: 5px 3px; background: var(--line); }
 
 .sidebar {
   width: 220px;
@@ -179,6 +196,7 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
 .sidebar .nav.active b { background: #28513c; color: #a4efba; }
 
 .main-area {
+  position: relative;
   grid-template-rows: minmax(150px, 2fr) auto minmax(180px, 3fr);
   min-height: 0;
   overflow: hidden;
@@ -201,6 +219,22 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
 }
 
 .message-content .kv { min-width: 520px; }
+
+.data-tabs .raw-search {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: min(210px, 42%);
+  height: 26px;
+  margin: 4px 0 4px auto;
+  padding: 0 8px;
+  border: 1px solid #304158;
+  border-radius: 5px;
+  background: #0b1420;
+  color: #718199;
+}
+.data-tabs .raw-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #d8e1ec; font-size: 10px; }
+.data-tabs .raw-search input::placeholder { color: #607188; }
 
 .message-content pre {
   width: max-content;
@@ -614,14 +648,16 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
 .advanced-filter-panel {
   position: absolute;
   z-index: 20;
-  top: 54px;
+  top: 0;
   right: 14px;
+  bottom: 0;
   width: min(860px, calc(100% - 28px));
-  max-height: calc(100% - 70px);
-  overflow: auto;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
   padding: 14px;
   border: 1px solid #34465d;
-  border-radius: 10px;
+  border-radius: 0 0 0 10px;
   background: #101a27;
   box-shadow: 0 18px 46px rgb(0 0 0 / 45%);
 }
@@ -661,7 +697,7 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
 .filter-settings select { padding: 0 28px 0 8px; }
 .filter-settings > span { margin-left: auto; color: #75869d; font-size: 10px; }
 
-.advanced-filter-groups { display: grid; gap: 7px; margin: 12px 0; }
+.advanced-filter-groups { display: grid; align-content: start; gap: 7px; min-height: 0; margin: 12px 0; overflow: auto; }
 .filter-group { display: grid; gap: 6px; padding: 9px; border: 1px solid #2d3d52; border-radius: 8px; background: #0c1622; }
 .filter-row { display: grid; grid-template-columns: minmax(145px, 1.2fr) minmax(125px, 1fr) minmax(155px, 1.5fr) 30px 48px 42px; align-items: center; gap: 7px; }
 .filter-row select,

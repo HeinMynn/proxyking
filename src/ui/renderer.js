@@ -5,8 +5,11 @@ const records = new Map();
 const knownDevices = new Map();
 const breakpointRules = new Set();
 const pendingBreakpoints = new Map();
+const hiddenRecordIds = new Set();
+const hiddenHosts = new Set();
 let activeBreakpoint = null;
 const views = { request: 'headers', response: 'headers' };
+const rawSearches = { request: '', response: '' };
 let state = { running: false, paused: false, busy: false, host: '127.0.0.1', port: 8080 };
 let selectedId = null;
 let selectedDomain = null;
@@ -17,6 +20,7 @@ let renderQueued = false;
 let detailVersion = 0;
 let noticeTimer = null;
 let currentPage = 'traffic';
+let contextRecord = null;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -26,10 +30,24 @@ function element(tag, className, text) {
 }
 function bytes(value = 0) { return value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1048576).toFixed(1)} MB`; }
 function colorHue(value) { return [...value].reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) % 360, 0); }
-function doNotInspectLines() { return $('doNotInspectRules').value.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#')); }
+function ruleLines(id) { return $(id).value.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#')); }
+function doNotInspectLines() { return ruleLines('doNotInspectRules'); }
 function updateRuleCount() {
-  const count = doNotInspectLines().length;
+  const count = doNotInspectLines().length + ruleLines('excludeInspectApps').length;
   $('doNotInspectCount').textContent = `${count} ${count === 1 ? 'rule' : 'rules'}`;
+}
+function settingsFromForm() {
+  return {
+    doNotInspect: doNotInspectLines(),
+    excludeInspectApps: ruleLines('excludeInspectApps'),
+    excludeCaptureHosts: [],
+    excludeCaptureApps: []
+  };
+}
+function showSavedSettings(saved) {
+  $('doNotInspectRules').value = [...new Set([...(saved.doNotInspect || []), ...(saved.excludeCaptureHosts || [])])].join('\n');
+  $('excludeInspectApps').value = [...new Set([...(saved.excludeInspectApps || []), ...(saved.excludeCaptureApps || [])])].join('\n');
+  updateRuleCount();
 }
 function showPage(page) {
   currentPage = page;
@@ -37,6 +55,28 @@ function showPage(page) {
   $('settingsPage').hidden = page !== 'settings';
   $('settingsButton').classList.toggle('active', page === 'settings');
   $('allTraffic').classList.toggle('active', page === 'traffic' && !selectedDomain && !selectedApp && !selectedDevice);
+}
+function recordHostname(record) {
+  try { return new URL(record.url.replace(/^tls:/, 'https:')).hostname; }
+  catch { return String(record.host || '').replace(/:\d+$/, ''); }
+}
+function closeContextMenu() {
+  $('connectionContextMenu').hidden = true;
+  contextRecord = null;
+}
+function openContextMenu(event, record) {
+  event.preventDefault();
+  contextRecord = record;
+  const menu = $('connectionContextMenu');
+  const appIdentified = Boolean(record.application && record.application !== 'Unknown app');
+  const excludeApp = menu.querySelector('[data-action="exclude-app"]');
+  excludeApp.disabled = !appIdentified;
+  excludeApp.textContent = appIdentified ? `Exclude ${record.application} from capture` : 'App cannot be identified for exclusion';
+  menu.hidden = false;
+  const bounds = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(6, Math.min(event.clientX, innerWidth - bounds.width - 6))}px`;
+  menu.style.top = `${Math.max(6, Math.min(event.clientY, innerHeight - bounds.height - 6))}px`;
+  menu.querySelector('button:not(:disabled)')?.focus();
 }
 function notify(message) {
   clearTimeout(noticeTimer);
@@ -103,6 +143,7 @@ function filteredRecords() {
   const search = $('search').value.toLowerCase();
   const filter = $('typeFilter').value;
   return [...records.values()].filter(record => {
+    if (hiddenRecordIds.has(record.id) || hiddenHosts.has(recordHostname(record))) return false;
     if (selectedDomain && (record.domain || record.host) !== selectedDomain || selectedApp && record.application !== selectedApp || selectedDevice && record.remoteDevice !== selectedDevice) return false;
     if (!`${record.url} ${record.method} ${record.status || ''}`.toLowerCase().includes(search)) return false;
     const basicMatch = filter === 'all' || filter === 'https' && record.secure || filter === 'errors' && (record.state === 'failed' || record.status >= 400) || filter === 'json' && /json/i.test(record.contentType || '') || filter === 'tunnels' && record.tunneled;
@@ -139,6 +180,7 @@ function render() {
     // Select on the initial pointer press; retain click for keyboard activation.
     row.addEventListener('pointerdown', event => { if (event.button === 0) select(); });
     row.addEventListener('click', event => { if (event.detail === 0) select(); });
+    row.addEventListener('contextmenu', event => openContextMenu(event, record));
     return row;
   });
   $('requests').replaceChildren(...rows);
@@ -314,7 +356,10 @@ function renderSide(side) {
   if (view === 'headers') content.replaceChildren(pairs(currentRecord[`${side}Headers`], `No ${side} headers.`, matchers));
   else if (view === 'query') content.replaceChildren(pairs(queryValues(side, currentRecord), side === 'request' ? 'No query parameters.' : 'No redirect query parameters.', matchers));
   else if (view === 'body') content.replaceChildren(prettyBody(currentRecord[`${side}Body`], currentRecord.state === 'pending', matchers));
-  else { const pre = element('pre'); pre.append(highlightedText(rawMessage(side, currentRecord), matchers)); content.replaceChildren(pre); }
+  else {
+    const rawMatchers = rawSearches[side] ? [rawSearches[side]] : [];
+    const pre = element('pre'); pre.append(highlightedText(rawMessage(side, currentRecord), rawMatchers)); content.replaceChildren(pre);
+  }
 }
 function renderMessages() { renderSide('request'); renderSide('response'); }
 
@@ -449,19 +494,45 @@ $('breakpointDialog').addEventListener('cancel', event => { event.preventDefault
 $('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; selectedDevice = null; showPage('traffic'); render(); });
 $('settingsButton').addEventListener('click', () => showPage('settings'));
 $('doNotInspectRules').addEventListener('input', updateRuleCount);
+$('excludeInspectApps').addEventListener('input', updateRuleCount);
 $('addTelegramRules').addEventListener('click', () => {
   const rules = new Set(doNotInspectLines());
   ['*.telegram.org', '*.telegram.me', '*.t.me', '*.telegra.ph', '*.telegram-cdn.org'].forEach(rule => rules.add(rule));
   $('doNotInspectRules').value = [...rules].join('\n');
   updateRuleCount();
 });
+$('connectionContextMenu').addEventListener('click', event => action(async () => {
+  const actionName = event.target.closest('button')?.dataset.action;
+  const record = contextRecord;
+  if (!actionName || !record) return;
+  closeContextMenu();
+  const hostname = recordHostname(record);
+  if (actionName === 'copy') {
+    await api.copyText(record.url);
+    notify('Request URL copied.');
+  } else if (actionName === 'hide-request') {
+    hiddenRecordIds.add(record.id);
+    if (selectedId === record.id) resetSelection();
+    render();
+  } else if (actionName === 'hide-host') {
+    hiddenHosts.add(hostname);
+    if (currentRecord && recordHostname(currentRecord) === hostname) resetSelection();
+    render();
+  } else {
+    const next = settingsFromForm();
+    if (actionName === 'exclude-host' && !next.doNotInspect.includes(hostname)) next.doNotInspect.push(hostname);
+    if (actionName === 'exclude-app' && record.application && !next.excludeInspectApps.some(app => app.toLowerCase() === record.application.toLowerCase())) next.excludeInspectApps.push(record.application);
+    const saved = await api.updateSettings(next);
+    showSavedSettings(saved);
+    notify('Capture exclusion saved for new connections.');
+  }
+}));
 $('saveSettings').addEventListener('click', () => action(async () => {
   $('saveSettings').disabled = true;
   try {
-    const saved = await api.updateSettings({ doNotInspect: doNotInspectLines() });
-    $('doNotInspectRules').value = saved.doNotInspect.join('\n');
-    updateRuleCount();
-    notify('Settings saved. New matching connections will use encrypted pass-through.');
+    const saved = await api.updateSettings(settingsFromForm());
+    showSavedSettings(saved);
+    notify('Settings saved. New matching traffic will be excluded from capture.');
   } finally { $('saveSettings').disabled = false; }
 }));
 $('search').addEventListener('input', scheduleRender);
@@ -471,8 +542,35 @@ $('automaticProxy').addEventListener('change', render);
 document.querySelectorAll('.data-tabs').forEach(nav => nav.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
   const side = nav.dataset.side; views[side] = button.dataset.view;
   nav.querySelectorAll('button').forEach(item => item.classList.toggle('selected', item === button));
+  nav.querySelector('.raw-search').hidden = views[side] !== 'raw';
   renderSide(side);
 })));
+for (const side of ['request', 'response']) $(`${side}RawSearch`).addEventListener('input', event => {
+  rawSearches[side] = event.target.value;
+  if (views[side] === 'raw') renderSide(side);
+});
+document.addEventListener('pointerdown', event => { if (!$('connectionContextMenu').hidden && !$('connectionContextMenu').contains(event.target)) closeContextMenu(); });
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    closeContextMenu();
+    if (!$('advancedFilterPanel').hidden) {
+      $('advancedFilterPanel').hidden = true;
+      $('advancedFilterToggle').setAttribute('aria-expanded', 'false');
+    }
+  }
+  const filterShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey;
+  if (filterShortcut && event.key.toLowerCase() === 'f' && !document.querySelector('dialog[open]')) {
+    event.preventDefault();
+    showPage('traffic');
+    $('advancedFilterPanel').hidden = false;
+    $('advancedFilterToggle').setAttribute('aria-expanded', 'true');
+    $('advancedFilterGroups').querySelector('.filter-value')?.focus();
+  }
+});
+window.addEventListener('blur', closeContextMenu);
+window.addEventListener('resize', closeContextMenu);
 document.addEventListener('keydown', event => { if (event.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !document.querySelector('dialog[open]')) { event.preventDefault(); $('search').focus(); } });
 
 api.on('record', record => {
@@ -491,7 +589,7 @@ api.on('breakpoint-resolved', id => {
   showNextBreakpoint();
 });
 
-api.on('cleared', () => { records.clear(); selectedDomain = null; selectedApp = null; resetSelection(); render(); });
+api.on('cleared', () => { records.clear(); hiddenRecordIds.clear(); hiddenHosts.clear(); selectedDomain = null; selectedApp = null; resetSelection(); render(); });
 
 filterUI.initialize(() => { scheduleRender(); if (currentRecord) renderMessages(); });
 
@@ -501,8 +599,7 @@ action(async () => {
   snapshot.records.forEach(record => records.set(record.id, record));
   (snapshot.devices || []).forEach(device => knownDevices.set(device.address, device));
   (snapshot.breakpoints || []).forEach(rule => breakpointRules.add(rule));
-  $('doNotInspectRules').value = (snapshot.settings?.doNotInspect || []).join('\n');
-  updateRuleCount();
+  showSavedSettings(snapshot.settings || { doNotInspect: [], excludeInspectApps: [], excludeCaptureHosts: [], excludeCaptureApps: [] });
   updateState(snapshot.state);
   if (snapshot.notice) notify(snapshot.notice);
   if (snapshot.state.running) $('automaticProxy').checked = snapshot.state.mode === 'automatic';

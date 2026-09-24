@@ -41,13 +41,14 @@ function request(port, url, body = '', headers = {}) {
     req.on('error', reject); req.end(body);
   });
 }
-function secureRequest(proxyPort, targetPort, ca, proxyHost = '127.0.0.1') {
+function secureRequest(proxyPort, targetPort, ca, proxyHost = '127.0.0.1', headers = {}) {
   return new Promise((resolve, reject) => {
     const connect = http.request({ host: proxyHost, port: proxyPort, method: 'CONNECT', path: `localhost:${targetPort}` });
     connect.on('error', reject);
     connect.on('connect', (_res, socket) => {
       const secure = tls.connect({ socket, servername: 'localhost', ca }, () => {
-        secure.write(`GET /secure HTTP/1.1\r\nHost: localhost:${targetPort}\r\nConnection: close\r\n\r\n`);
+        const extra = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join('');
+        secure.write(`GET /secure HTTP/1.1\r\nHost: localhost:${targetPort}\r\n${extra}Connection: close\r\n\r\n`);
       });
       const chunks = []; secure.on('data', chunk => chunks.push(chunk));
       secure.on('error', reject); secure.on('end', () => resolve(Buffer.concat(chunks).toString()));
@@ -308,7 +309,7 @@ test('private ALPN protocols are passed through unchanged and identified as a tu
   assert.equal(engine.detail(record.id).requestHeaders['tls-alpn'], 'private-media');
 });
 
-test('Do Not Inspect rules bypass HTTPS interception immediately', async t => {
+test('host exclusions bypass HTTPS inspection without creating capture records', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-excluded-origin-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await ensureCertificate(root);
@@ -317,9 +318,42 @@ test('Do Not Inspect rules bypass HTTPS interception immediately', async t => {
   const port = await listen(t, https.createServer(await serverCertificate(root), (_req, res) => res.end('excluded origin')));
   const response = await secureRequest(engine.state.port, port, ca);
   assert.match(response, /excluded origin/);
-  const tunnel = engine.list().find(record => record.tunneled);
-  assert.ok(tunnel);
-  assert.match(engine.detail(tunnel.id).responseBody.note, /Do Not Inspect/);
+  assert.equal(engine.list().length, 0);
+});
+
+test('detected app exclusions hide the first request and teach later HTTPS connections to use hidden pass-through', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'proxyking-app-excluded-origin-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await ensureCertificate(root);
+  const originCa = await fs.readFile(path.join(root, 'certs', 'ca.pem'));
+  const { engine, directory } = await fixture(t, { excludeInspectApps: ['Google Chrome'], httpsAgent: new https.Agent({ ca: originCa }) });
+  engine.httpsAgent.options.lookup = (_host, _opts, callback) => callback(null, [{ address: '127.0.0.1', family: 4 }]);
+  const port = await listen(t, https.createServer(await serverCertificate(root), (_req, res) => res.end('app excluded origin')));
+  const browserHeaders = { 'User-Agent': 'Mozilla/5.0 Chrome/140.0 Safari/537.36' };
+  const first = await secureRequest(engine.state.port, port, await fs.readFile(path.join(directory, 'certs', 'ca.pem')), '127.0.0.1', browserHeaders);
+  assert.match(first, /app excluded origin/);
+  const second = await secureRequest(engine.state.port, port, originCa, '127.0.0.1', browserHeaders);
+  assert.match(second, /app excluded origin/);
+  assert.equal(engine.list().length, 0);
+});
+
+test('capture exclusions hide matching websites and detected apps without blocking traffic', async t => {
+  const { engine } = await fixture(t, { excludeCaptureHosts: ['127.0.0.1'] });
+  const port = await listen(t, http.createServer((_req, res) => res.end('still forwarded')));
+  const excludedHost = await request(engine.state.port, `http://127.0.0.1:${port}/host`);
+  assert.equal(excludedHost.body.toString(), 'still forwarded');
+  engine.setCaptureExclusions({ hosts: [], apps: ['Google Chrome'] });
+  const excludedApp = await request(engine.state.port, `http://127.0.0.1:${port}/app`, '', { 'user-agent': 'Mozilla/5.0 Chrome/140.0 Safari/537.36' });
+  assert.equal(excludedApp.body.toString(), 'still forwarded');
+  assert.equal(engine.list().length, 0);
+  await request(engine.state.port, `http://127.0.0.1:${port}/visible`, '', { 'user-agent': 'curl/8.0' });
+  assert.equal(engine.list().length, 1);
+});
+
+test('capture host exclusions suppress encrypted tunnel records', () => {
+  const engine = new CaptureEngine({ excludeCaptureHosts: ['*.telegram.org'] });
+  engine.addPassthrough({ host: 'media.telegram.org', port: 443, protocols: ['h2'], reason: 'do-not-inspect' });
+  assert.equal(engine.list().length, 0);
 });
 
 test('HTTP/2-only TLS is inspected and translated through the capture pipeline', async t => {
@@ -378,14 +412,14 @@ test('CONNECT targets are parsed without allowing malformed authorities to throw
   }
 });
 
-test('Do Not Inspect rules normalize exact hosts, wildcards, comments and IP addresses', () => {
+test('exclusion rules normalize exact hosts, wildcards, comments and IP addresses', () => {
   const rules = normalizeDoNotInspectRules([' *.Telegram.org. ', 'telegram.org', '# note', '', '192.0.2.10', '*.telegram.org']);
   assert.deepEqual(rules, ['*.telegram.org', 'telegram.org', '192.0.2.10']);
   assert.equal(matchesDoNotInspect('media.telegram.org', rules), true);
   assert.equal(matchesDoNotInspect('telegram.org', ['*.telegram.org']), true);
   assert.equal(matchesDoNotInspect('nottelegram.org', rules), false);
   assert.equal(matchesDoNotInspect('192.0.2.10', rules), true);
-  assert.throws(() => normalizeDoNotInspectRules(['https://telegram.org/path']), /Invalid Do Not Inspect host/);
+  assert.throws(() => normalizeDoNotInspectRules(['https://telegram.org/path']), /Invalid Exclude host/);
 });
 
 test('ClientHello ALPN parser distinguishes inspectable and pass-through protocols', async t => {
