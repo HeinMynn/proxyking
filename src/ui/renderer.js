@@ -20,6 +20,7 @@ let renderQueued = false;
 let detailVersion = 0;
 let noticeTimer = null;
 let currentPage = 'traffic';
+let currentSettingsSection = 'connection';
 let contextRecord = null;
 
 function element(tag, className, text) {
@@ -55,6 +56,19 @@ function showPage(page) {
   $('settingsPage').hidden = page !== 'settings';
   $('settingsButton').classList.toggle('active', page === 'settings');
   $('allTraffic').classList.toggle('active', page === 'traffic' && !selectedDomain && !selectedApp && !selectedDevice);
+}
+function showSettingsSection(section = 'connection') {
+  if (!['connection', 'https', 'exclusions'].includes(section)) section = 'connection';
+  currentSettingsSection = section;
+  showPage('settings');
+  document.querySelectorAll('[data-settings-section]').forEach(button => {
+    button.classList.toggle('active', button.dataset.settingsSection === section);
+    button.setAttribute('aria-current', button.dataset.settingsSection === section ? 'page' : 'false');
+  });
+  $('settingsConnection').hidden = section !== 'connection';
+  $('settingsHttps').hidden = section !== 'https';
+  $('settingsExclusions').hidden = section !== 'exclusions';
+  if (section === 'https') refreshCertificateStatus();
 }
 function recordHostname(record) {
   try { return new URL(record.url.replace(/^tls:/, 'https:')).hostname; }
@@ -363,7 +377,6 @@ function renderSide(side) {
 }
 function renderMessages() { renderSide('request'); renderSide('response'); }
 
-function openSetup() { $('setup').showModal(); refreshCertificateStatus(); }
 async function openDeviceSetup() {
   if (!$('deviceSetupDialog').open) $('deviceSetupDialog').showModal();
   const details = await action(() => api.deviceSetup());
@@ -410,12 +423,13 @@ function setupSectionToggle(buttonId, contentId, collapsedClass) {
 setupSectionToggle('appsToggle', 'apps', 'apps-collapsed');
 setupSectionToggle('devicesToggle', 'devices', 'devices-collapsed');
 setupSectionToggle('domainsToggle', 'hosts', 'domains-collapsed');
-for (const id of ['setupButton', 'certificateButton', 'emptySetup']) $(id).addEventListener('click', openSetup);
+$('emptySetup').addEventListener('click', () => showSettingsSection('connection'));
+document.querySelectorAll('[data-settings-section]').forEach(button => button.addEventListener('click', () => showSettingsSection(button.dataset.settingsSection)));
 $('deviceSetupButton').addEventListener('click', openDeviceSetup);
-$('closeSetup').addEventListener('click', () => $('setup').close());
 $('closeDeviceSetup').addEventListener('click', () => $('deviceSetupDialog').close());
 $('copyDeviceSetupUrl').addEventListener('click', () => action(async () => { await api.copyText($('deviceSetupUrl').textContent); notify('Mobile setup URL copied.'); }));
 $('copyYtDlpOption').addEventListener('click', () => action(async () => { await api.copyText('--compat-options no-certifi'); notify('yt-dlp certificate option copied.'); }));
+$('copyYtDlpBypass').addEventListener('click', () => action(async () => { await api.copyText('--proxy ""'); notify('yt-dlp proxy bypass copied.'); }));
 $('captureButton').addEventListener('click', async () => {
   notify('');
   const next = await action(() => !state.running ? api.start(Number($('port').value), $('automaticProxy').checked) : state.paused ? api.resume() : api.pause());
@@ -437,7 +451,7 @@ $('clearButton').addEventListener('click', () => action(() => api.clear()));
 $('recoverButton').addEventListener('click', () => action(async () => updateState(await api.recover())));
 $('exportButton').addEventListener('click', () => action(async () => { if (await api.export()) notify('Session exported as HAR.'); }));
 $('exportSelected').addEventListener('click', () => action(async () => { if (currentRecord && await api.export(currentRecord.id)) notify('Selected request exported as HAR.'); }));
-$('exportCertificate').addEventListener('click', () => action(async () => { if (await api.certificate()) { $('setup').close(); notify('Public certificate exported. Install it, then restart the browser.'); } }));
+$('exportCertificate').addEventListener('click', () => action(async () => { if (await api.certificate()) notify('Public certificate exported. Install it, then restart the browser.'); }));
 $('trustCertificate').addEventListener('click', () => action(async () => {
   $('trustCertificate').disabled = true;
   try {
@@ -493,7 +507,7 @@ $('sendBreakpoint').addEventListener('click', () => resolveActiveBreakpoint('edi
 $('breakpointDialog').addEventListener('cancel', event => { event.preventDefault(); resolveActiveBreakpoint('continue'); });
 
 $('allTraffic').addEventListener('click', () => { selectedDomain = null; selectedApp = null; selectedDevice = null; showPage('traffic'); render(); });
-$('settingsButton').addEventListener('click', () => showPage('settings'));
+$('settingsButton').addEventListener('click', () => showSettingsSection(currentSettingsSection));
 $('doNotInspectRules').addEventListener('input', updateRuleCount);
 $('excludeInspectApps').addEventListener('input', updateRuleCount);
 $('addTelegramRules').addEventListener('click', () => {

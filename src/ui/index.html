@@ -41,9 +41,7 @@
       </button>
       <div id="hosts" class="hosts" hidden><p class="subtle">Domains appear as traffic arrives.</p></div>
       <div class="side-actions">
-        <button id="setupButton" class="nav"><span class="nav-icon">⚙</span><span class="nav-label">Connection setup</span></button>
         <button id="deviceSetupButton" class="nav"><span class="nav-icon">▯</span><span class="nav-label">Mobile setup</span></button>
-        <button id="certificateButton" class="nav"><span class="nav-icon">◇</span><span class="nav-label">HTTPS certificate</span><i id="certificateStatusSidebar" class="certificate-status-dot checking" title="Checking certificate trust" aria-label="Checking certificate trust"></i></button>
         <button id="settingsButton" class="nav"><span class="nav-icon">⚙</span><span class="nav-label">Settings</span></button>
         <button id="exportButton" class="nav"><span class="nav-icon">↗</span><span class="nav-label">Export HAR</span></button>
         <button id="recoverButton" class="nav warning" hidden><span class="nav-icon">↻</span><span class="nav-label">Restore proxy settings</span></button>
@@ -90,30 +88,46 @@
       </section>
     </main>
     <main id="settingsPage" class="settings-page" hidden>
-      <header class="settings-header"><div><div class="eyebrow">PROXYKING</div><h1>Settings</h1><p>Control how traffic is inspected.</p></div></header>
-      <section class="settings-card">
-        <div class="settings-card-heading"><div><h2>Exclude from capture</h2><p>Matching traffic is forwarded but does not appear in connections or HAR exports. HTTPS hosts also skip inspection.</p></div><span id="doNotInspectCount" class="settings-count">0 rules</span></div>
-        <label for="doNotInspectRules">Website and host patterns</label>
-        <textarea id="doNotInspectRules" spellcheck="false" placeholder="*.example.com&#10;api.example.net&#10;192.0.2.10"></textarea>
-        <p class="settings-help">Enter one hostname, wildcard domain, or IP address per line. A wildcard such as <code>*.telegram.org</code> matches the base domain and all subdomains. URLs and paths are not accepted.</p>
-        <label for="excludeInspectApps" class="settings-sub-label">Detected app names</label>
-        <textarea id="excludeInspectApps" class="settings-app-list" spellcheck="false" placeholder="Telegram&#10;Google Chrome&#10;Postman"></textarea>
-        <p class="settings-help">App names are learned from identifiable HTTP traffic. Once detected, later HTTPS connections to their hosts also bypass inspection and remain excluded.</p>
-        <div class="settings-actions"><button id="addTelegramRules">Exclude Telegram</button><button id="saveSettings" class="primary-action">Save settings</button></div>
-      </section>
+      <header class="settings-header"><div><div class="eyebrow">PROXYKING</div><h1>Settings</h1><p>Configure connections, HTTPS inspection, and capture rules.</p></div></header>
+      <div class="settings-shell">
+        <nav class="settings-nav" aria-label="Settings sections">
+          <button class="settings-nav-item active" data-settings-section="connection"><span>⌁</span><div>Connection<small>Address, port, and system proxy</small></div></button>
+          <button class="settings-nav-item" data-settings-section="https"><span>◇</span><div>HTTPS<small>Certificate trust and CLI tools</small></div><i id="certificateStatusSidebar" class="certificate-status-dot checking" title="Checking certificate trust" aria-label="Checking certificate trust"></i></button>
+          <button class="settings-nav-item" data-settings-section="exclusions"><span>⊘</span><div>Exclusions<small>Hosts and detected applications</small></div><b id="doNotInspectCount" class="settings-count">0</b></button>
+        </nav>
+        <div class="settings-sections">
+          <section id="settingsConnection" class="settings-section">
+            <div class="settings-card-heading"><div><h2>Connection</h2><p>Choose where Proxyking listens and how traffic reaches it.</p></div></div>
+            <div class="settings-block"><h3>Listening address</h3><p>Proxyking detects the private IPv4 address on your active route and binds only to that interface.</p><div class="detected-address">Detected address <code id="setupEndpoint">Detecting…</code></div><label class="port-label">Proxy port <input id="port" type="number" min="1" max="65535" value="8080"></label></div>
+            <div class="settings-block"><h3>System proxy</h3><label class="automatic-option"><input id="automaticProxy" type="checkbox" checked> Configure system proxy automatically</label><p id="systemGuide"></p><p>Pause keeps traffic routed through Proxyking without recording it. Stop or closing Proxyking restores your previous proxy settings.</p></div>
+            <p class="settings-footnote">Listening on a LAN address makes the proxy reachable from that network interface while capture is running. Your firewall may ask for permission.</p>
+          </section>
+          <section id="settingsHttps" class="settings-section" hidden>
+            <div class="settings-card-heading"><div><h2>HTTPS inspection</h2><p>Manage the local certificate authority used to inspect encrypted traffic.</p></div></div>
+            <p id="certificateStatusModal" class="certificate-status-detail checking">Checking certificate trust…</p>
+            <div class="certificate-actions"><button id="trustCertificate">Install &amp; Trust CA</button><button id="exportCertificate">Export Proxyking CA</button><button id="removeCertificate" class="danger-button">Revoke &amp; Remove CA</button></div>
+            <p id="trustGuide" class="settings-help"></p>
+            <div id="windowsCliTrust" class="cli-trust-guide" hidden><strong>PowerShell and Python tools</strong><p><code>yt-dlp.exe</code> uses its own certificate bundle. Make it use the trusted Windows certificate store:</p><div><code>yt-dlp.exe --compat-options no-certifi "URL"</code><button id="copyYtDlpOption" type="button">Copy option</button></div><p>Or bypass Proxyking completely for that download:</p><div><code>yt-dlp.exe --proxy "" "URL"</code><button id="copyYtDlpBypass" type="button">Copy bypass</button></div></div>
+            <p class="settings-footnote">Unsupported protocols and certificate-pinned apps are passed through as encrypted tunnels.</p>
+          </section>
+          <section id="settingsExclusions" class="settings-section" hidden>
+            <div class="settings-card-heading"><div><h2>Exclude from capture</h2><p>Matching traffic is forwarded but does not appear in connections or HAR exports. HTTPS hosts also skip inspection.</p></div></div>
+            <label for="doNotInspectRules">Website and host patterns</label>
+            <textarea id="doNotInspectRules" spellcheck="false" placeholder="*.example.com&#10;api.example.net&#10;192.0.2.10"></textarea>
+            <p class="settings-help">Enter one hostname, wildcard domain, or IP address per line. A wildcard such as <code>*.telegram.org</code> matches the base domain and all subdomains. URLs and paths are not accepted.</p>
+            <label for="excludeInspectApps" class="settings-sub-label">Detected app names</label>
+            <textarea id="excludeInspectApps" class="settings-app-list" spellcheck="false" placeholder="Telegram&#10;Google Chrome&#10;Postman"></textarea>
+            <p class="settings-help">App names are learned from identifiable HTTP traffic. Once detected, later HTTPS connections to their hosts also bypass inspection and remain excluded. A client that fails during TLS before sending HTTP headers cannot be identified here; use its direct or no-proxy option instead.</p>
+            <div class="settings-actions"><button id="addTelegramRules">Exclude Telegram</button><button id="saveSettings" class="primary-action">Save settings</button></div>
+          </section>
+        </div>
+      </div>
     </main>
   </div>
   <footer class="network-footer">
     <span><i id="footerStatus" class="status-indicator paused"></i><b id="routingStatus">System proxy restored</b></span>
     <span>Requests <b id="requestCount">0</b></span><span>Sent <b id="requestTraffic">0 B</b></span><span>Received <b id="responseTraffic">0 B</b></span><span>Domains <b id="footerHosts">0</b></span><span id="footerVersion" class="footer-version">v0.3.6</span>
   </footer>
-  <dialog id="setup">
-    <div class="dialog-heading"><div><div class="eyebrow">CONNECTION</div><h2>Capture setup</h2></div><button id="closeSetup" aria-label="Close setup">✕</button></div>
-    <div class="setup-step"><b>1</b><div><h3>Automatic network address</h3><p>Proxyking detects the private IPv4 address on your active route and listens on that interface.</p><div class="detected-address">Detected address <code id="setupEndpoint">Detecting…</code></div><label class="port-label">Proxy port <input id="port" type="number" min="1" max="65535" value="8080"></label></div></div>
-    <div class="setup-step"><b>2</b><div><h3>System proxy</h3><label class="automatic-option"><input id="automaticProxy" type="checkbox" checked> Configure system proxy automatically</label><p id="systemGuide"></p><p>Pause stops recording while keeping traffic routed through Proxyking. Stop or closing Proxyking restores your previous proxy settings.</p></div></div>
-    <div class="setup-step"><b>3</b><div><h3>HTTPS inspection</h3><p>Install and trust the public certificate to inspect browser HTTPS traffic.</p><p id="certificateStatusModal" class="certificate-status-detail checking">Checking certificate trust…</p><div class="certificate-actions"><button id="trustCertificate">Install &amp; Trust CA</button><button id="exportCertificate">Export Proxyking CA</button><button id="removeCertificate" class="danger-button">Revoke &amp; Remove CA</button></div><p id="trustGuide"></p><div id="windowsCliTrust" class="cli-trust-guide" hidden><strong>PowerShell and Python tools</strong><p><code>yt-dlp.exe</code> uses its own certificate bundle. Make it use the trusted Windows certificate store:</p><div><code>yt-dlp.exe --compat-options no-certifi "URL"</code><button id="copyYtDlpOption" type="button">Copy option</button></div></div><p>Unsupported protocols and certificate-pinned apps are passed through as encrypted tunnels.</p></div></div>
-    <div class="setup-foot">Listening on a LAN address makes the proxy reachable from that network interface while capture is running. Your firewall may ask for permission.</div>
-  </dialog>
   <dialog id="deviceSetupDialog" class="device-setup-dialog">
     <div class="dialog-heading"><div><div class="eyebrow">REMOTE DEVICES</div><h2>Set up Android or iOS</h2></div><button id="closeDeviceSetup" aria-label="Close mobile setup">✕</button></div>
     <div id="deviceSetupUnavailable" class="device-setup-unavailable" hidden>
