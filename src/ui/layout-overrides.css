@@ -627,6 +627,14 @@ body { grid-template-rows: 58px auto minmax(0, 1fr) 26px; }
 .traffic-tool-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 #breakpointTarget { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 
+.cli-trust-guide { margin: 12px 0; padding: 10px 11px; border: 1px solid #3b4d64; border-radius: 7px; background: #101b29; color: #b7c5d7; font-size: 11px; }
+.cli-trust-guide > strong { color: #e3ebf6; }
+.cli-trust-guide > p { margin: 6px 0 9px; line-height: 1.45; }
+.cli-trust-guide > div { display: flex; align-items: center; gap: 8px; }
+.cli-trust-guide code { color: #9ed9ad; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.cli-trust-guide > div > code { flex: 1; padding: 7px 8px; border-radius: 5px; background: #09131f; }
+.cli-trust-guide button { height: 30px; padding: 0 9px; white-space: nowrap; }
+
 .connections-panel { position: relative; }
 
 .advanced-filter-toggle {

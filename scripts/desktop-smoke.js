@@ -77,6 +77,8 @@ const assert = require('node:assert/strict');
     await expect(page.locator('#deviceSetupUnavailable')).toBeVisible();
     await page.locator('#closeDeviceSetup').click();
     await page.locator('#setupButton').click();
+    await expect(page.locator('#windowsCliTrust')).toBeVisible();
+    await expect(page.locator('#windowsCliTrust')).toContainText('yt-dlp.exe --compat-options no-certifi');
     await page.locator('#port').fill(String(proxyPort));
     await page.locator('#closeSetup').click();
     await page.locator('#captureButton').click();

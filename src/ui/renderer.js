@@ -415,6 +415,7 @@ $('deviceSetupButton').addEventListener('click', openDeviceSetup);
 $('closeSetup').addEventListener('click', () => $('setup').close());
 $('closeDeviceSetup').addEventListener('click', () => $('deviceSetupDialog').close());
 $('copyDeviceSetupUrl').addEventListener('click', () => action(async () => { await api.copyText($('deviceSetupUrl').textContent); notify('Mobile setup URL copied.'); }));
+$('copyYtDlpOption').addEventListener('click', () => action(async () => { await api.copyText('--compat-options no-certifi'); notify('yt-dlp certificate option copied.'); }));
 $('captureButton').addEventListener('click', async () => {
   notify('');
   const next = await action(() => !state.running ? api.start(Number($('port').value), $('automaticProxy').checked) : state.paused ? api.resume() : api.pause());
@@ -608,6 +609,7 @@ action(async () => {
   const automaticCertificateTrust = mac || windows;
   $('trustCertificate').hidden = !automaticCertificateTrust;
   $('removeCertificate').hidden = !automaticCertificateTrust;
+  $('windowsCliTrust').hidden = !windows;
   $('systemGuide').textContent = mac ? 'macOS may ask for administrator permission. Existing proxy settings are restored on Stop.' : 'Windows user proxy settings are updated automatically and restored on Stop.';
   $('trustGuide').textContent = mac ? 'Install & Trust adds the CA to your login keychain with SSL trust. System-wide automatic installation requires a signed privileged helper.' : windows ? 'Install & Trust adds the CA to your Current User Trusted Root Certification Authorities store. Windows may show a security confirmation.' : 'Install the exported CA in your system or browser trust store, then restart the browser.';
   await refreshCertificateStatus();
