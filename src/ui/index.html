@@ -98,7 +98,19 @@
         <div class="settings-sections">
           <section id="settingsConnection" class="settings-section">
             <div class="settings-card-heading"><div><h2>Connection</h2><p>Choose where Proxyking listens and how traffic reaches it.</p></div></div>
-            <div class="settings-block"><h3>Listening address</h3><p>Proxyking detects the private IPv4 address on your active route and binds only to that interface.</p><div class="detected-address">Detected address <code id="setupEndpoint">Detecting…</code></div><label class="port-label">Proxy port <input id="port" type="number" min="1" max="65535" value="8080"></label></div>
+            <div class="settings-block network-path-block">
+              <div class="network-block-heading"><div><h3>Network path</h3><p>Proxyking listens on one local interface while outbound requests follow the operating system route.</p></div><button id="refreshNetwork" type="button">Refresh</button></div>
+              <label class="listener-label" for="listenerInterface">Listening interface<select id="listenerInterface"><option value="auto">Automatic LAN</option><option value="localhost">Localhost only</option></select></label>
+              <div class="network-path-grid">
+                <div class="network-path-item"><span>LISTENER</span><strong id="listenerPath">Detecting…</strong><small>Used by browsers and remote devices</small></div>
+                <div class="network-path-arrow" aria-hidden="true">→</div>
+                <div class="network-path-item"><span>OUTBOUND ROUTE</span><strong id="outboundPath">Detecting…</strong><small id="outboundDetail">Uses the system routing table</small></div>
+              </div>
+              <div class="network-path-status"><span id="networkRouteBadge" class="network-badge">Checking route</span><span id="networkWarning"></span></div>
+              <p id="vpnGuidance" class="vpn-guidance" hidden></p>
+              <label class="port-label">Proxy port <input id="port" type="number" min="1" max="65535" value="8080"></label>
+              <div class="detected-address">Current endpoint <code id="setupEndpoint">Detecting…</code></div>
+            </div>
             <div class="settings-block"><h3>System proxy</h3><label class="automatic-option"><input id="automaticProxy" type="checkbox" checked> Configure system proxy automatically</label><p id="systemGuide"></p><p>Pause keeps traffic routed through Proxyking without recording it. Stop or closing Proxyking restores your previous proxy settings.</p></div>
             <p class="settings-footnote">Listening on a LAN address makes the proxy reachable from that network interface while capture is running. Your firewall may ask for permission.</p>
           </section>
@@ -145,6 +157,7 @@
           <li>Run the HTTPS verification test and return to Proxyking.</li>
         </ol>
         <p class="device-setup-note">The setup page and CA stay on your local network. Mobile operating systems require manual confirmation before changing proxy or certificate trust settings.</p>
+        <p id="deviceVpnGuidance" class="device-setup-note vpn-device-note" hidden></p>
       </div>
     </div>
   </dialog>

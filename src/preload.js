@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('proxyking', {
   setBreakpoint: (host, side, enabled) => ipcRenderer.invoke('capture:set-breakpoint', host, side, enabled),
   resolveBreakpoint: (id, decision) => ipcRenderer.invoke('capture:resolve-breakpoint', id, decision),
   updateSettings: settings => ipcRenderer.invoke('capture:update-settings', settings),
+  selectListener: preference => ipcRenderer.invoke('capture:select-listener', preference),
+  refreshNetwork: () => ipcRenderer.invoke('capture:refresh-network'),
   copyText: text => ipcRenderer.invoke('capture:copy-text', text),
   deviceSetup: () => ipcRenderer.invoke('capture:device-setup'),
   certificate: () => ipcRenderer.invoke('capture:certificate'),
@@ -20,7 +22,7 @@ contextBridge.exposeInMainWorld('proxyking', {
   removeCertificate: () => ipcRenderer.invoke('capture:remove-certificate'),
   export: id => ipcRenderer.invoke('capture:export', id),
   on: (name, callback) => {
-    if (!['record', 'device', 'state', 'notice', 'cleared', 'breakpoint', 'breakpoint-rules', 'breakpoint-resolved'].includes(name)) return;
+    if (!['record', 'device', 'state', 'notice', 'network', 'cleared', 'breakpoint', 'breakpoint-rules', 'breakpoint-resolved'].includes(name)) return;
     const listener = (_event, value) => callback(value);
     ipcRenderer.on(`capture:${name}`, listener);
     return () => ipcRenderer.removeListener(`capture:${name}`, listener);

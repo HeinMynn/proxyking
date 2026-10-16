@@ -22,6 +22,8 @@ let noticeTimer = null;
 let currentPage = 'traffic';
 let currentSettingsSection = 'connection';
 let contextRecord = null;
+let networkProfile = null;
+let listenerPreference = 'auto';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -42,13 +44,48 @@ function settingsFromForm() {
     doNotInspect: doNotInspectLines(),
     excludeInspectApps: ruleLines('excludeInspectApps'),
     excludeCaptureHosts: [],
-    excludeCaptureApps: []
+    excludeCaptureApps: [],
+    listenerInterface: listenerPreference
   };
 }
 function showSavedSettings(saved) {
   $('doNotInspectRules').value = [...new Set([...(saved.doNotInspect || []), ...(saved.excludeCaptureHosts || [])])].join('\n');
   $('excludeInspectApps').value = [...new Set([...(saved.excludeInspectApps || []), ...(saved.excludeCaptureApps || [])])].join('\n');
+  listenerPreference = saved.listenerInterface || 'auto';
   updateRuleCount();
+}
+
+function vpnGuidance(profile) {
+  if (!profile?.vpn?.detected) return '';
+  const provider = profile.vpn.provider;
+  if (provider === 'NordVPN') return 'NordVPN: keep Proxyking inside the VPN tunnel. For remote-device capture, turn off “Stay invisible on LAN.”';
+  if (provider === 'ExpressVPN') return 'ExpressVPN: keep Proxyking inside the VPN tunnel. For remote-device capture, enable “Allow access to devices on local network.”';
+  return `${provider}: keep Proxyking inside the VPN tunnel and allow access to local-network devices for mobile capture.`;
+}
+
+function renderNetworkProfile(profile) {
+  if (!profile) return;
+  networkProfile = profile;
+  listenerPreference = profile.listenerPreference || listenerPreference;
+  const select = $('listenerInterface');
+  const options = [
+    { value: 'auto', label: `Automatic LAN${profile.interfaces[0] ? ` — ${profile.interfaces[0].name} ${profile.interfaces[0].address}` : ''}` },
+    { value: 'localhost', label: 'Localhost only — 127.0.0.1' },
+    ...profile.interfaces.map(item => ({ value: item.id, label: `${item.name} — ${item.address}` }))
+  ];
+  select.replaceChildren(...options.map(item => { const option = element('option', '', item.label); option.value = item.value; return option; }));
+  select.value = options.some(item => item.value === listenerPreference) ? listenerPreference : 'auto';
+  $('listenerPath').textContent = `${profile.listener.name} · ${profile.listener.address}:${state.port}`;
+  $('outboundPath').textContent = profile.outbound.address ? `${profile.outbound.interface} · ${profile.outbound.address}` : 'Route unavailable';
+  $('outboundDetail').textContent = profile.vpn.detected ? `Traffic exits through ${profile.vpn.provider}` : 'Uses the normal system route';
+  $('networkRouteBadge').textContent = profile.vpn.detected ? `${profile.vpn.provider} detected` : 'Direct system route';
+  $('networkRouteBadge').classList.toggle('vpn', profile.vpn.detected);
+  $('networkWarning').textContent = (profile.warnings || []).join(' ');
+  const guidance = vpnGuidance(profile);
+  $('vpnGuidance').textContent = guidance;
+  $('vpnGuidance').hidden = !guidance;
+  $('deviceVpnGuidance').textContent = guidance ? `${guidance} The API sees the desktop VPN exit, not a VPN running on the phone.` : '';
+  $('deviceVpnGuidance').hidden = !guidance;
 }
 function showPage(page) {
   currentPage = page;
@@ -139,12 +176,15 @@ function updateState(next) {
   $('setupEndpoint').textContent = endpoint;
   $('port').disabled = state.running || state.busy;
   $('automaticProxy').disabled = state.running || state.busy || state.recoveryPending;
+  $('listenerInterface').disabled = state.running || state.busy || state.recoveryPending;
+  $('refreshNetwork').disabled = state.busy;
   $('captureButton').disabled = state.busy || (!state.running && state.recoveryPending);
   $('stopButton').disabled = state.busy || !state.running;
   $('newButton').disabled = state.busy || state.recoveryPending && !state.systemProxy;
   $('recoverButton').hidden = !state.recoveryPending || state.running;
   $('recoverButton').disabled = state.busy;
   $('routingStatus').textContent = state.busy ? 'Updating system proxy…' : state.recoveryPending && !state.systemProxy ? 'Proxy recovery needed' : state.systemProxy ? `System proxy → ${endpoint}${state.paused ? ' · capture paused' : ''}` : state.running ? `Manual proxy → ${endpoint}${state.paused ? ' · capture paused' : ''}` : 'System proxy restored';
+  if (networkProfile) renderNetworkProfile(networkProfile);
 }
 
 function scheduleRender() {
@@ -385,6 +425,7 @@ async function openDeviceSetup() {
   $('deviceSetupUnavailable').hidden = details.available;
   $('deviceSetupAvailable').hidden = !details.available;
   if (details.available) $('deviceSetupQr').src = details.qrDataUrl;
+  if (details.network) renderNetworkProfile(details.network);
 }
 function showNextBreakpoint() {
   if (activeBreakpoint || !pendingBreakpoints.size) return;
@@ -430,6 +471,15 @@ $('closeDeviceSetup').addEventListener('click', () => $('deviceSetupDialog').clo
 $('copyDeviceSetupUrl').addEventListener('click', () => action(async () => { await api.copyText($('deviceSetupUrl').textContent); notify('Mobile setup URL copied.'); }));
 $('copyYtDlpOption').addEventListener('click', () => action(async () => { await api.copyText('--compat-options no-certifi'); notify('yt-dlp certificate option copied.'); }));
 $('copyYtDlpBypass').addEventListener('click', () => action(async () => { await api.copyText('--proxy ""'); notify('yt-dlp proxy bypass copied.'); }));
+$('listenerInterface').addEventListener('change', event => action(async () => {
+  const profile = await api.selectListener(event.target.value);
+  if (profile) renderNetworkProfile(profile);
+}));
+$('refreshNetwork').addEventListener('click', () => action(async () => {
+  $('refreshNetwork').disabled = true;
+  try { const profile = await api.refreshNetwork(); if (profile) renderNetworkProfile(profile); }
+  finally { $('refreshNetwork').disabled = state.busy; }
+}));
 $('captureButton').addEventListener('click', async () => {
   notify('');
   const next = await action(() => !state.running ? api.start(Number($('port').value), $('automaticProxy').checked) : state.paused ? api.resume() : api.pause());
@@ -596,6 +646,7 @@ api.on('record', record => {
 api.on('device', device => { knownDevices.set(device.address, device); render(); });
 api.on('state', next => { updateState(next); if ($('deviceSetupDialog').open) openDeviceSetup(); });
 api.on('notice', notify);
+api.on('network', renderNetworkProfile);
 api.on('breakpoint', item => { pendingBreakpoints.set(item.id, item); showNextBreakpoint(); });
 api.on('breakpoint-rules', rules => { breakpointRules.clear(); rules.forEach(rule => breakpointRules.add(rule)); if (currentRecord) loadDetail(); });
 api.on('breakpoint-resolved', id => {
@@ -615,6 +666,7 @@ action(async () => {
   (snapshot.devices || []).forEach(device => knownDevices.set(device.address, device));
   (snapshot.breakpoints || []).forEach(rule => breakpointRules.add(rule));
   showSavedSettings(snapshot.settings || { doNotInspect: [], excludeInspectApps: [], excludeCaptureHosts: [], excludeCaptureApps: [] });
+  renderNetworkProfile(snapshot.network);
   updateState(snapshot.state);
   if (snapshot.notice) notify(snapshot.notice);
   if (snapshot.state.running) $('automaticProxy').checked = snapshot.state.mode === 'automatic';

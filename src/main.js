@@ -7,7 +7,7 @@ const { CaptureEngine } = require('./engine');
 const { createAdapter } = require('./system-proxy/adapters');
 const { SystemProxyManager } = require('./system-proxy/manager');
 const { CaptureSession } = require('./capture-session');
-const { detectLanAddress } = require('./network');
+const { detectNetworkProfile } = require('./network');
 const {
   installMacCertificate, removeMacCertificate, macCertificateTrustStatus,
   installWindowsCertificate, removeWindowsCertificate, windowsCertificateTrustStatus
@@ -22,7 +22,9 @@ let capture;
 let settings;
 let allowQuit = false;
 let quitInProgress = false;
-let localAddress = '127.0.0.1';
+let networkProfile;
+let networkTimer;
+let networkRefresh;
 const indexPath = path.join(__dirname, 'ui', 'index.html');
 const indexUrl = pathToFileURL(indexPath).href;
 const iconPath = path.join(__dirname, 'assets', 'icon.png');
@@ -48,6 +50,46 @@ function createWindow() {
   window.loadFile(indexPath);
 }
 
+function sendNetworkProfile() {
+  if (window && !window.isDestroyed() && networkProfile) window.webContents.send('capture:network', networkProfile);
+}
+
+function routeLabel(profile) {
+  return profile?.vpn?.detected ? profile.vpn.provider : profile?.outbound?.interface || 'system route';
+}
+
+async function refreshNetworkProfile({ announce = false } = {}) {
+  if (networkRefresh) return networkRefresh;
+  networkRefresh = (async () => {
+    const previous = networkProfile;
+    const detected = await detectNetworkProfile({ listenerPreference: settings?.get().listenerInterface || 'auto' });
+    if (capture?.state.running && detected.listener.address !== capture.state.host) {
+      detected.recommendedListener = detected.listener;
+      detected.listener = {
+        id: 'active', name: previous?.listener?.name || 'Active listener', address: capture.state.host,
+        kind: previous?.listener?.kind || 'lan', available: detected.interfaces.some(item => item.address === capture.state.host)
+      };
+      detected.warnings.push(detected.listener.available
+        ? `A different listening interface is selected. Restart capture to use ${detected.recommendedListener.address}.`
+        : `The active listening address ${capture.state.host} is no longer available. Restart capture after choosing an available interface.`);
+    }
+    networkProfile = detected;
+    sendNetworkProfile();
+    if (announce && capture?.state.running && previous) {
+      const before = `${previous.outbound.interface}|${previous.outbound.address}|${previous.vpn.detected}`;
+      const after = `${detected.outbound.interface}|${detected.outbound.address}|${detected.vpn.detected}`;
+      if (before !== after) {
+        if (!previous.vpn.detected && detected.vpn.detected) capture.tell(`VPN route detected: outbound traffic now uses ${routeLabel(detected)}.`);
+        else if (previous.vpn.detected && !detected.vpn.detected) capture.tell('VPN route disconnected. Outbound traffic may now use your normal network connection.');
+        else capture.tell(`Outbound network route changed to ${routeLabel(detected)}.`);
+      }
+    }
+    return networkProfile;
+  })();
+  try { return await networkRefresh; }
+  finally { networkRefresh = null; }
+}
+
 // Two instances must never take conflicting snapshots of system settings.
 const primary = app.requestSingleInstanceLock();
 if (!primary) app.quit();
@@ -58,11 +100,11 @@ app.on('second-instance', () => {
 if (primary) app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.dock.setIcon(iconPath);
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  localAddress = await detectLanAddress();
   settings = new SettingsStore(app.getPath('userData'));
   const preferences = await settings.load();
+  networkProfile = await detectNetworkProfile({ listenerPreference: preferences.listenerInterface });
   engine = new CaptureEngine({
-    directory: path.join(app.getPath('userData'), 'certificates'), host: localAddress,
+    directory: path.join(app.getPath('userData'), 'certificates'), host: networkProfile.listener.address,
     doNotInspect: preferences.doNotInspect,
     excludeInspectApps: preferences.excludeInspectApps,
     excludeCaptureHosts: preferences.excludeCaptureHosts,
@@ -76,19 +118,27 @@ if (primary) app.whenReady().then(async () => {
   for (const name of ['state', 'notice']) capture.on(name, data => {
     if (window && !window.isDestroyed()) window.webContents.send(`capture:${name}`, data);
   });
-  handle('capture:snapshot', () => ({ state: capture.state, records: engine.list(), devices: engine.deviceList(), breakpoints: engine.breakpointList(), settings: settings.get(), platform: process.platform, version: app.getVersion(), notice: capture.notice }));
+  handle('capture:snapshot', () => ({ state: capture.state, records: engine.list(), devices: engine.deviceList(), breakpoints: engine.breakpointList(), settings: settings.get(), network: networkProfile, platform: process.platform, version: app.getVersion(), notice: capture.notice }));
   handle('capture:update-settings', async next => {
     const saved = await settings.update(next);
     engine.setInspectionExclusions({ hosts: saved.doNotInspect, apps: saved.excludeInspectApps });
     engine.setCaptureExclusions({ hosts: saved.excludeCaptureHosts, apps: saved.excludeCaptureApps });
     return saved;
   });
+  handle('capture:select-listener', async preference => {
+    if (capture.state.running || capture.state.busy) throw new Error('Stop capture before changing the listening interface.');
+    await settings.update({ ...settings.get(), listenerInterface: preference });
+    return refreshNetworkProfile();
+  });
+  handle('capture:refresh-network', () => refreshNetworkProfile());
   handle('capture:start', async (port, automatic = true) => {
     if (quitInProgress) throw new Error('Proxyking is closing.');
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Choose a port from 1 to 65535.');
     if (typeof automatic !== 'boolean') throw new Error('Invalid capture mode.');
-    localAddress = await detectLanAddress();
-    return capture.start(port, automatic, localAddress);
+    await refreshNetworkProfile();
+    const state = await capture.start(port, automatic, networkProfile.listener.address);
+    await refreshNetworkProfile();
+    return state;
   });
   handle('capture:pause', () => capture.pause());
   handle('capture:resume', () => capture.resume());
@@ -105,7 +155,8 @@ if (primary) app.whenReady().then(async () => {
       available: capture.state.running,
       url,
       endpoint: `${capture.state.host}:${capture.state.port}`,
-      qrDataUrl: capture.state.running ? await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 2, width: 280 }) : null
+      qrDataUrl: capture.state.running ? await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 2, width: 280 }) : null,
+      network: networkProfile
     };
   });
   handle('capture:copy-text', text => {
@@ -157,6 +208,8 @@ if (primary) app.whenReady().then(async () => {
     return true;
   });
   createWindow();
+  networkTimer = setInterval(() => refreshNetworkProfile({ announce: true }).catch(() => {}), 5000);
+  networkTimer.unref?.();
   await capture.recover().catch(error => capture.tell(`System proxy recovery failed: ${error.message} Use Restore proxy settings to retry before starting capture.`));
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 }).catch(error => {
@@ -165,11 +218,14 @@ if (primary) app.whenReady().then(async () => {
 });
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', event => {
-  if (allowQuit || !capture) return;
+  if (allowQuit || !capture) {
+    if (networkTimer) { clearInterval(networkTimer); networkTimer = null; }
+    return;
+  }
   event.preventDefault();
   if (quitInProgress) return;
   quitInProgress = true;
-  capture.stop().then(() => { allowQuit = true; app.quit(); }).catch(error => {
+  capture.stop().then(() => { allowQuit = true; if (networkTimer) { clearInterval(networkTimer); networkTimer = null; } app.quit(); }).catch(error => {
     quitInProgress = false;
     capture.tell(`Could not restore the system proxy: ${error.message} Retry Stop capture or Restore proxy settings.`);
     dialog.showErrorBox('Proxy settings still need restoration', 'Proxyking is staying open to avoid leaving your browser pointed at a stopped proxy.\n\n' + error.message);

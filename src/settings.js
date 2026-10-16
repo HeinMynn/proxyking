@@ -2,14 +2,22 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { normalizeDoNotInspectRules, normalizeHostRules, normalizeAppRules } = require('./do-not-inspect');
 
-const defaults = Object.freeze({ doNotInspect: [], excludeInspectApps: [], excludeCaptureHosts: [], excludeCaptureApps: [] });
+const defaults = Object.freeze({ doNotInspect: [], excludeInspectApps: [], excludeCaptureHosts: [], excludeCaptureApps: [], listenerInterface: 'auto' });
+
+function normalizeListenerInterface(value) {
+  if (value === undefined || value === 'auto') return 'auto';
+  if (value === 'localhost') return value;
+  if (typeof value === 'string' && /^interface:[^\0\r\n]{1,160}$/.test(value)) return value;
+  throw new Error('Invalid listening interface.');
+}
 
 function normalizeSettings(value = {}) {
   return {
     doNotInspect: normalizeDoNotInspectRules(value.doNotInspect),
     excludeInspectApps: normalizeAppRules(value.excludeInspectApps),
     excludeCaptureHosts: normalizeHostRules(value.excludeCaptureHosts, 'Capture exclusions'),
-    excludeCaptureApps: normalizeAppRules(value.excludeCaptureApps)
+    excludeCaptureApps: normalizeAppRules(value.excludeCaptureApps),
+    listenerInterface: normalizeListenerInterface(value.listenerInterface)
   };
 }
 
@@ -34,7 +42,8 @@ class SettingsStore {
       doNotInspect: [...this.value.doNotInspect],
       excludeInspectApps: [...this.value.excludeInspectApps],
       excludeCaptureHosts: [...this.value.excludeCaptureHosts],
-      excludeCaptureApps: [...this.value.excludeCaptureApps]
+      excludeCaptureApps: [...this.value.excludeCaptureApps],
+      listenerInterface: this.value.listenerInterface
     };
   }
 
@@ -49,4 +58,4 @@ class SettingsStore {
   }
 }
 
-module.exports = { SettingsStore };
+module.exports = { SettingsStore, normalizeListenerInterface };
