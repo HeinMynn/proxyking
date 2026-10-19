@@ -413,13 +413,17 @@ test('CONNECT targets are parsed without allowing malformed authorities to throw
 });
 
 test('exclusion rules normalize exact hosts, wildcards, comments and IP addresses', () => {
-  const rules = normalizeDoNotInspectRules([' *.Telegram.org. ', 'telegram.org', '# note', '', '192.0.2.10', '*.telegram.org']);
-  assert.deepEqual(rules, ['*.telegram.org', 'telegram.org', '192.0.2.10']);
+  const rules = normalizeDoNotInspectRules([' *.Telegram.org. ', 'telegram.org', '# note', '', '192.0.2.10', '2001:DB8::10', '[2001:db8::20]', '*.telegram.org']);
+  assert.deepEqual(rules, ['*.telegram.org', 'telegram.org', '192.0.2.10', '2001:db8::10', '2001:db8::20']);
   assert.equal(matchesDoNotInspect('media.telegram.org', rules), true);
   assert.equal(matchesDoNotInspect('telegram.org', ['*.telegram.org']), true);
   assert.equal(matchesDoNotInspect('nottelegram.org', rules), false);
   assert.equal(matchesDoNotInspect('192.0.2.10', rules), true);
+  assert.equal(matchesDoNotInspect('[2001:db8::10]', rules), true);
+  assert.equal(matchesDoNotInspect('2001:db8::20', rules), true);
   assert.throws(() => normalizeDoNotInspectRules(['https://telegram.org/path']), /Invalid Exclude host/);
+  assert.throws(() => normalizeDoNotInspectRules(['192.0.2.10:443']), /Invalid Exclude host/);
+  assert.throws(() => normalizeDoNotInspectRules(['*.192.0.2.10']), /Invalid Exclude host/);
 });
 
 test('ClientHello ALPN parser distinguishes inspectable and pass-through protocols', async t => {

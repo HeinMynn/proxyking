@@ -9,12 +9,18 @@ function normalizeHostRules(input, label = 'Host exclusions') {
   for (const value of values) {
     const rule = String(value).trim().toLowerCase().replace(/\.$/, '');
     if (!rule || rule.startsWith('#')) continue;
-    const hostname = rule.startsWith('*.') ? rule.slice(2) : rule;
-    if (!hostname || hostname.length > 253 || /[\s/:?#@]/.test(hostname) ||
-        (!net.isIP(hostname) && !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(hostname))) {
+    const wildcard = rule.startsWith('*.');
+    let hostname = wildcard ? rule.slice(2) : rule;
+    if (hostname.startsWith('[') || hostname.endsWith(']')) {
+      if (wildcard || !hostname.startsWith('[') || !hostname.endsWith(']')) throw new Error(`Invalid ${label} host: ${value}`);
+      hostname = hostname.slice(1, -1);
+    }
+    const ipVersion = net.isIP(hostname);
+    if (!hostname || hostname.length > 253 || wildcard && ipVersion ||
+        (!ipVersion && (/[^a-z0-9.-]/.test(hostname) || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(hostname)))) {
       throw new Error(`Invalid ${label} host: ${value}`);
     }
-    const normalized = rule.startsWith('*.') ? `*.${hostname}` : hostname;
+    const normalized = wildcard ? `*.${hostname}` : hostname;
     if (!rules.includes(normalized)) rules.push(normalized);
   }
   return rules;

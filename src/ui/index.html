@@ -124,9 +124,9 @@
           </section>
           <section id="settingsExclusions" class="settings-section" hidden>
             <div class="settings-card-heading"><div><h2>Exclude from capture</h2><p>Matching traffic is forwarded but does not appear in connections or HAR exports. HTTPS hosts also skip inspection.</p></div></div>
-            <label for="doNotInspectRules">Website and host patterns</label>
-            <textarea id="doNotInspectRules" spellcheck="false" placeholder="*.example.com&#10;api.example.net&#10;192.0.2.10"></textarea>
-            <p class="settings-help">Enter one hostname, wildcard domain, or IP address per line. A wildcard such as <code>*.telegram.org</code> matches the base domain and all subdomains. URLs and paths are not accepted.</p>
+            <label for="doNotInspectRules">Websites, hosts, and IP addresses</label>
+            <textarea id="doNotInspectRules" spellcheck="false" placeholder="*.example.com&#10;192.0.2.10&#10;2001:db8::10"></textarea>
+            <p class="settings-help">Enter one hostname, wildcard domain, IPv4 address, or IPv6 address per line. A wildcard such as <code>*.telegram.org</code> matches the base domain and all subdomains. Ports, URLs, and paths are not accepted.</p>
             <label for="excludeInspectApps" class="settings-sub-label">Detected app names</label>
             <textarea id="excludeInspectApps" class="settings-app-list" spellcheck="false" placeholder="Telegram&#10;Google Chrome&#10;Postman"></textarea>
             <p class="settings-help">App names are learned from identifiable HTTP traffic. Once detected, later HTTPS connections to their hosts also bypass inspection and remain excluded. A client that fails during TLS before sending HTTP headers cannot be identified here; use its direct or no-proxy option instead.</p>

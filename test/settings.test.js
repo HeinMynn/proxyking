@@ -11,13 +11,13 @@ test('settings persist normalized exclusion rules', async t => {
   const store = new SettingsStore(directory);
   assert.deepEqual(await store.load(), { doNotInspect: [], excludeInspectApps: [], excludeCaptureHosts: [], excludeCaptureApps: [], listenerInterface: 'auto' });
   assert.deepEqual(await store.update({
-    doNotInspect: [' *.Telegram.org ', 'api.telegram.org', '*.telegram.org'],
+    doNotInspect: [' *.Telegram.org ', 'api.telegram.org', '*.telegram.org', '192.0.2.10', '[2001:db8::10]'],
     excludeInspectApps: ['Telegram'],
     excludeCaptureHosts: ['*.t.me', '*.T.ME'],
     excludeCaptureApps: ['Telegram', 'telegram'],
     listenerInterface: 'interface:Wi-Fi'
   }), {
-    doNotInspect: ['*.telegram.org', 'api.telegram.org'],
+    doNotInspect: ['*.telegram.org', 'api.telegram.org', '192.0.2.10', '2001:db8::10'],
     excludeInspectApps: ['Telegram'],
     excludeCaptureHosts: ['*.t.me'],
     excludeCaptureApps: ['Telegram'],
@@ -25,7 +25,7 @@ test('settings persist normalized exclusion rules', async t => {
   });
   const reloaded = new SettingsStore(directory);
   assert.deepEqual(await reloaded.load(), {
-    doNotInspect: ['*.telegram.org', 'api.telegram.org'],
+    doNotInspect: ['*.telegram.org', 'api.telegram.org', '192.0.2.10', '2001:db8::10'],
     excludeInspectApps: ['Telegram'],
     excludeCaptureHosts: ['*.t.me'],
     excludeCaptureApps: ['Telegram'],
