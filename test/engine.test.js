@@ -481,6 +481,7 @@ test('compressed previews decode without changing wire data', () => {
 });
 
 test('application grouping recognizes common client user agents', () => {
+  assert.equal(inferApplication({ 'user-agent': 'TV/1.7 (Macintosh; OS X 27.0.1; 26A434) AppleWebKit/2625.1.29.11.28 AMS/1 (dt:1)' }), 'Apple TV');
   assert.equal(inferApplication({ 'user-agent': 'Mozilla/5.0 Chrome/140.0 Safari/537.36 Edg/140.0' }), 'Microsoft Edge');
   assert.equal(inferApplication({ 'user-agent': 'Mozilla/5.0 Chrome/140.0 Safari/537.36' }), 'Google Chrome');
   assert.equal(inferApplication({ 'user-agent': 'PostmanRuntime/7.46.0' }), 'Postman');

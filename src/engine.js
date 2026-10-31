@@ -45,6 +45,7 @@ function remoteDeviceAddress(address, listeningHost) {
 function inferApplication(headers = {}) {
   const agent = String(headers['user-agent'] || '');
   const signatures = [
+    [/^TV\/[^ ]+ .*\bAppleWebKit\/.*\bAMS\//, 'Apple TV'],
     [/\bEdg\//, 'Microsoft Edge'], [/\bOPR\//, 'Opera'], [/\bChrome\//, 'Google Chrome'],
     [/\bFirefox\//, 'Mozilla Firefox'], [/\bVersion\/[^ ]+.*\bSafari\//, 'Safari'],
     [/\bElectron\//, 'Electron app'], [/\bPostmanRuntime\//, 'Postman'], [/\binsomnia\//i, 'Insomnia'],
